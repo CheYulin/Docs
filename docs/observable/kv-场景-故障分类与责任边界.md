@@ -180,10 +180,10 @@
 
 | 现象 | 故障分类 | 优先排查 | 责任边界 |
 |------|----------|----------|----------|
-| 缩容时大量 `K_SCALE_DOWN` | 预期行为 | 客户端退避、切流 | **L0** 集成策略；**L3** 确认退出语义 |
-| 长时间 `K_SCALING` 后仍失败 | 迁移未完成或 Master 慢 | etcd 上的 ring/元数据、Master 负载 | **L2 + L3** |
-| 缩容后客户端仍连旧 IP | 服务发现滞后 | K8s Service / 自研发现 | **L0 + L1** |
-| etcd Watch 延迟导致脑裂感 | 控制面延迟 | etcd 性能、网络 | **L2 + L1** |
+| 缩容时大量 `K_SCALE_DOWN` | 预期行为 | 客户端退避、切流 | **L0（集成方）** 集成策略；**L3（数据系统）** 确认退出语义 |
+| 长时间 `K_SCALING` 后仍失败 | 迁移未完成或 Master 慢 | etcd 上的 ring/元数据、Master 负载 | **L2（三方件） + L3（数据系统）** |
+| 缩容后客户端仍连旧 IP | 服务发现滞后 | K8s Service / 自研发现 | **L0（集成方） + L1（平台与网络）** |
+| etcd Watch 延迟导致脑裂感 | 控制面延迟 | etcd 性能、网络 | **L2（三方件） + L1（平台与网络）** |
 
 ### 3.3 数据系统内模块
 
@@ -212,25 +212,25 @@
 
 | 步骤 | 参与者 | 典型故障 | 责任边界 | 数据系统模块 |
 |------|--------|----------|----------|--------------|
-| ① Client→入口 Worker | TCP/ZMQ + `Get` RPC | `K_RPC_UNAVAILABLE`、超时 | **L1 / L3** | `ClientWorkerRemoteApi::Get`、`WorkerOCServiceImpl::Get` |
-| ② 入口→元数据 Worker | Worker 间 RPC | 元数据超时、Master/路由 | **L3** | Worker-Master / 元数据查询链 |
-| ③ 入口→数据 Worker | 触发拉取 | 路由错误、对端宕机 | **L3** | `GetObjectFromAnywhere` 等 |
-| ④ 数据→入口 URMA | UB 写 | `K_URMA_*`、`K_RDMA_*` | **L1（网卡/驱动）+ L3** | URMA Manager、传输层 |
-| ⑤ TCP 响应 / 控制面 | 与 ④ 配合 | 超时、错包 | **L1 + L3** | 同上 + Stub |
-| ⑥ SHM 返回客户端 | mmap/偏移 | fd、映射失败 | **L1 + L3** | `MmapManager`、见 SDK Init 手册 §8 |
+| ① Client→入口 Worker | TCP/ZMQ + `Get` RPC | `K_RPC_UNAVAILABLE`、超时 | **L1（平台与网络） / L3（数据系统）** | `ClientWorkerRemoteApi::Get`、`WorkerOCServiceImpl::Get` |
+| ② 入口→元数据 Worker | Worker 间 RPC | 元数据超时、Master/路由 | **L3（数据系统）** | Worker-Master / 元数据查询链 |
+| ③ 入口→数据 Worker | 触发拉取 | 路由错误、对端宕机 | **L3（数据系统）** | `GetObjectFromAnywhere` 等 |
+| ④ 数据→入口 URMA | UB 写 | `K_URMA_*`、`K_RDMA_*` | **L1（平台与网络）（网卡/驱动）+ L3（数据系统）** | URMA Manager、传输层 |
+| ⑤ TCP 响应 / 控制面 | 与 ④ 配合 | 超时、错包 | **L1（平台与网络） + L3（数据系统）** | 同上 + Stub |
+| ⑥ SHM 返回客户端 | mmap/偏移 | fd、映射失败 | **L1（平台与网络） + L3（数据系统）** | `MmapManager`、见 SDK Init 手册 §8 |
 
-切流后首跳跨机： [kv_client_read_path_switch_worker_sequence.puml](../flows/sequences/kv-client/kv_client_read_path_switch_worker_sequence.puml) — **① 即跨机**，超时更敏感（**L1** 权重上升）。
+切流后首跳跨机： [kv_client_read_path_switch_worker_sequence.puml](../flows/sequences/kv-client/kv_client_read_path_switch_worker_sequence.puml) — **① 即跨机**，超时更敏感（**L1（平台与网络）** 权重上升）。
 
 ### 4.3 常见错误码与定界提示
 
 | 码 | 常见含义 | 倾向 |
 |----|----------|------|
-| `K_NOT_FOUND` (3) | Key 不存在 | **L3** 数据/元数据一致性或正常未写入 |
-| `K_NOT_FOUND_IN_L2CACHE` (26) | L2 未命中需其他路径 | **L3** 缓存策略与后端 |
-| `K_TRY_AGAIN` / `K_RPC_DEADLINE_EXCEEDED` / `K_RPC_UNAVAILABLE` | 可重试或链路 | **L1 + L3**，见 SDK Init 手册 §10 |
-| `K_OUT_OF_MEMORY` (6) | Worker/客户端分配失败 | **L1（资源）+ L3**（Arena/URMA 池） |
-| `K_SCALING` (32) | 集群在迁移 | **L2+L3**；Get 可能只在 `last_rc` |
-| `K_CLIENT_WORKER_DISCONNECT` (23) | 连接/心跳失效 | **L1 + L3** |
+| `K_NOT_FOUND` (3) | Key 不存在 | **L3（数据系统）** 数据/元数据一致性或正常未写入 |
+| `K_NOT_FOUND_IN_L2CACHE` (26) | L2 未命中需其他路径 | **L3（数据系统）** 缓存策略与后端 |
+| `K_TRY_AGAIN` / `K_RPC_DEADLINE_EXCEEDED` / `K_RPC_UNAVAILABLE` | 可重试或链路 | **L1（平台与网络） + L3（数据系统）**，见 SDK Init 手册 §10 |
+| `K_OUT_OF_MEMORY` (6) | Worker/客户端分配失败 | **L1（平台与网络）（资源）+ L3（数据系统）**（Arena/URMA 池） |
+| `K_SCALING` (32) | 集群在迁移 | **L2（三方件）+L3（数据系统）**；Get 可能只在 `last_rc` |
+| `K_CLIENT_WORKER_DISCONNECT` (23) | 连接/心跳失效 | **L1（平台与网络） + L3（数据系统）** |
 
 活动图总览：[kv_client_e2e_flow.puml](../flows/sequences/kv-client/kv_client_e2e_flow.puml)（`IsClientReady`、`GetBuffersFromWorker`、`ProcessGetResponse`）。
 
@@ -246,11 +246,11 @@
 
 | 现象 | 故障分类 | 优先排查 | 责任边界 |
 |------|----------|----------|----------|
-| `K_RPC_UNAVAILABLE` 在 SHM/URMA 建连 | 传输层 | 同读路径 UB/SHM | **L1 + L3** |
-| `K_SCALING` 长时间失败 | 迁移阻塞 | etcd、Master、队列 | **L2 + L3** |
-| `K_NO_SPACE` / `K_IO_ERROR` | 磁盘与 spill | 本地盘、L2 目录、权限 | **L1 + L3**（`Persistence`/eviction） |
-| `K_WRITE_BACK_QUEUE_FULL` (2003) | 写回反压 | Worker 负载、盘速 | **L3** 为主 |
-| `K_INVALID` | 参数/租户 | key、tenant、size | **L0** |
+| `K_RPC_UNAVAILABLE` 在 SHM/URMA 建连 | 传输层 | 同读路径 UB/SHM | **L1（平台与网络） + L3（数据系统）** |
+| `K_SCALING` 长时间失败 | 迁移阻塞 | etcd、Master、队列 | **L2（三方件） + L3（数据系统）** |
+| `K_NO_SPACE` / `K_IO_ERROR` | 磁盘与 spill | 本地盘、L2 目录、权限 | **L1（平台与网络） + L3（数据系统）**（`Persistence`/eviction） |
+| `K_WRITE_BACK_QUEUE_FULL` (2003) | 写回反压 | Worker 负载、盘速 | **L3（数据系统）** 为主 |
+| `K_INVALID` | 参数/租户 | key、tenant、size | **L0（集成方）** |
 
 ### 5.3 数据系统内模块
 
@@ -264,22 +264,24 @@
 
 | 依赖 | Worker 中典型触点 | 异常现象 | 责任边界 |
 |------|-------------------|----------|----------|
-| **etcd** | `EtcdStore`、`EtcdClusterManager::Init`、Watch、KeepAlive | 启动失败、节点状态错误、扩缩容卡顿 | **L2** 为主；配置错为 **L0** |
-| **文件系统** | RocksDB、L2 spill、`unix_domain_socket_dir`、日志与 liveness 文件 | `K_IO_ERROR`、`K_NO_SPACE`、UDS 创建失败 | **L1** 为主；逻辑错为 **L3** |
-| **网络** | 全链路 RPC、跨 Worker、URMA | `K_RPC_*`、连接重置 | **L1** |
-| **内存/大页** | jemalloc Arena、`mmap`、URMA 注册 | `K_OUT_OF_MEMORY`、UB 初始化失败 | **L1（限额）+ L3** |
+| **etcd** | `EtcdStore`、`EtcdClusterManager::Init`、Watch、KeepAlive | 启动失败、节点状态错误、扩缩容卡顿 | **L2（三方件）** 为主；配置错为 **L0（集成方）** |
+| **文件系统** | RocksDB、L2 spill、`unix_domain_socket_dir`、日志与 liveness 文件 | `K_IO_ERROR`、`K_NO_SPACE`、UDS 创建失败 | **L1（平台与网络）** 为主；逻辑错为 **L3（数据系统）** |
+| **网络** | 全链路 RPC、跨 Worker、URMA | `K_RPC_*`、连接重置 | **L1（平台与网络）** |
+| **内存/大页** | jemalloc Arena、`mmap`、URMA 注册 | `K_OUT_OF_MEMORY`、UB 初始化失败 | **L1（平台与网络）（限额）+ L3（数据系统）** |
 
 ---
 
-## 7. 汇总表：场景 → 首选证据 → 责任
+## 7. 汇总表：场景 → 日志级联证据 → 责任
 
-| 场景 | 首选证据（自证） | 非数据系统 | 数据系统内优先模块 |
-|------|------------------|------------|---------------------|
-| SDK Init | 客户端 `Detail` + Worker 是否出现 `Register client` | 配置、网络、IAM | `WorkerServiceImpl`、`ClientWorkerRemoteCommonApi` |
-| Worker Init | Worker 启动日志停在哪一步 + etcd 连通性 | etcd、磁盘、gflags | `WorkerOCServer::Init`、`EtcdClusterManager` |
-| 扩缩容 | `K_SCALE_DOWN`/`K_SCALING` + etcd 事件时间线 | 发现、调度 | `EtcdClusterManager`、`ListenWorker` 切流 |
-| KV 读 | 时序 ①～⑥ 哪一步超时 + `last_rc` | 网络、集成超时 | `Get` 链、L2、跨 Worker 拉取 |
-| KV 写 | MultiPublish 重试日志 + IO 错误 | 磁盘配额 | 写路径、eviction、Master 元数据 |
+| 场景 | SDK 侧看什么（错误码/日志） | Worker 侧看什么（级联日志） | 看哪个流程段 | 非数据系统 | 数据系统内优先模块 |
+|------|-----------------------------|------------------------------|--------------|------------|---------------------|
+| SDK Init | `K_INVALID`、`Get socket path failed`、`Register client failed`、`Cannot receive heartbeat from worker` | 是否出现 `RegisterClient` 入口；是否有 `Authenticate failed`、`worker add client failed`、`GetShmQueueUnit` 失败 | Init 链路（`Init -> Connect -> RegisterClient -> 首次心跳`） | 配置、网络、IAM | `WorkerServiceImpl`、`ClientWorkerRemoteCommonApi` |
+| Worker Init | 启动前探活失败、SDK 连接报 `1002` | `WorkerOCServer::Init` 停在哪一步；`etcd cluster manager init failed`、`replica manager init failed`、UDS bind/目录错误 | Worker 启动主链（`InitWorker -> WorkerOCServer::Init`） | etcd、磁盘、gflags | `WorkerOCServer::Init`、`EtcdClusterManager` |
+| 扩缩容 | `K_SCALE_DOWN(31)`、`K_SCALING(32)`、Get 场景 `last_rc=32` | HealthCheck 退出日志、MultiPublish moving/重试日志、etcd Watch/Revision 延迟 | 扩缩容链路（健康检查 -> 迁移 -> 切流） | 发现、调度 | `EtcdClusterManager`、`ListenWorker` 切流 |
+| KV 读 | `1002/1001/19`、`1004/1006/1008`、`K_NOT_FOUND`、`K_NOT_FOUND_IN_L2CACHE`、`last_rc`，以及 UB fallback WARNING | 入口 `Get` 是否收到；`RPC timeout. time elapsed...`；远端拉取失败（如 `Get from remote...`）；L2 读盘相关错误 | 时序 ①～⑥（先看 ①，再看 ②～⑤，最后 ⑥） | 网络、集成超时 | `Get` 链、L2、跨 Worker 拉取 |
+| KV 写 | `K_SCALING`、`1002`、`K_NO_SPACE/K_IO_ERROR`、`K_WRITE_BACK_QUEUE_FULL` | `Publish/MultiPublish` 入口日志；`The cluster is scaling, please try again.`；`Fail to create all the objects on master`；L2 落盘失败日志 | 写链路（Create/Copy -> Publish/MultiPublish -> 元数据提交/落盘） | 磁盘配额 | 写路径、eviction、Master 元数据 |
+
+> 使用方式：同一 `trace_id/request_id` 下，先看 SDK 侧错误码与消息，再在对应 Worker 入口方法查“是否收到 + 卡在哪段 + 下游是否失败”，最后按流程段回溯到 §9（TCP）/§10（UB）/§12（分场景树）。
 
 ---
 
@@ -344,8 +346,8 @@ const std::unordered_set<StatusCode> RETRY_ERROR_CODE{ StatusCode::K_TRY_AGAIN, 
 
 ### 9.4 TCP 链路定界提示
 
-- **消息里带 `Connect reset` / `EPIPE` / `ECONNRESET`**：优先 **对端关闭、网络中间设备 RST、Worker 崩溃**（L1 + L3）。
-- **只有 `The service is currently unavailable` + 较长 elapsed**：到 **入口 Worker 日志**查同 `trace_id`/方法索引，看是 **业务返回**还是 **下游 Worker 超时**（L3 内部分）。
+- **消息里带 `Connect reset` / `EPIPE` / `ECONNRESET`**：优先 **对端关闭、网络中间设备 RST、Worker 崩溃**（L1（平台与网络） + L3（数据系统））。
+- **只有 `The service is currently unavailable` + 较长 elapsed**：到 **入口 Worker 日志**查同 `trace_id`/方法索引，看是 **业务返回**还是 **下游 Worker 超时**（L3（数据系统）内部分）。
 - **与 UB 无关**：纯 TCP 问题通常发生在 **`stub_->Get` 之前或之中**；若 `Get` OK 而后续数据异常，再查 **§10 UB**。
 
 ---
@@ -416,7 +418,7 @@ Status UrmaManager::CheckUrmaConnectionStable(const std::string &hostAddress, co
 
 1. **先确认 §9**：`stub_->Get` 是否 OK、`last_rc` 是否触发重试。  
 2. **若 Get OK 且使用了 UB**：查是否有 **WARNING fallback**；无 fallback 而数据错 → **FillUrmaBuffer / 对端 URMA 写**。  
-3. **`K_URMA_NEED_CONNECT`**：通常需 **握手重连**（与 `ExchangeJfr` / 连接表相关）；偏 **驱动、网络、或 Worker 侧 URMA 状态**（L1 + L3）。
+3. **`K_URMA_NEED_CONNECT`**：通常需 **握手重连**（与 `ExchangeJfr` / 连接表相关）；偏 **驱动、网络、或 Worker 侧 URMA 状态**（L1（平台与网络） + L3（数据系统））。
 
 ---
 
@@ -442,7 +444,7 @@ flowchart TD
   I --> J
   J -->|1002/1001/1000/19| K[§9 TCP 链路表 + 网关日志]
   J -->|1004/1006/1008| L[§10 UB 链路表 + UrmaManager 日志]
-  J -->|6 OOM| M[Allocator / UB 池 / 系统内存 L1]
+  J -->|6 OOM| M[Allocator / UB 池 / 系统内存 L1（平台与网络）]
   J -->|31/32| N[etcd + EtcdClusterManager §3]
   J -->|23| O[ListenWorker 心跳 §1 + sdk-init §4.4]
 ```
@@ -458,12 +460,12 @@ flowchart TD
 ```mermaid
 flowchart TD
   S1[KVClient::Init / ObjectClientImpl::Init] --> S2{返回码}
-  S2 -->|K_INVALID| S3[L0: HostPort / 超时参数 / 服务发现]
-  S2 -->|CURVE / 密钥| S4[L0+L3: RpcAuthKeyManager]
+  S2 -->|K_INVALID| S3[L0（集成方）: HostPort / 超时参数 / 服务发现]
+  S2 -->|CURVE / 密钥| S4[L0（集成方）+L3（数据系统）: RpcAuthKeyManager]
   S2 -->|Get socket path failed| S5[§9 TCP: Worker 是否监听 / 网络]
   S2 -->|Register client failed| S6{Detail 含?}
-  S6 -->|Authenticate| S7[L0 IAM + L3 authenticate.cpp]
-  S6 -->|ShmQ / add client| S8[L3 WorkerServiceImpl + ClientManager]
+  S6 -->|Authenticate| S7[L0（集成方） IAM + L3（数据系统） authenticate.cpp]
+  S6 -->|ShmQ / add client| S8[L3（数据系统） WorkerServiceImpl + ClientManager]
   S2 -->|K_CLIENT_WORKER_DISCONNECT 23| S9[ListenWorker 首心跳: §9 + connectTimeoutMs]
   S2 -->|mmap / fd| S10[sdk-init §8 FD 交换]
 ```
@@ -475,11 +477,11 @@ flowchart TD
 ```mermaid
 flowchart TD
   W1[Worker::InitWorker] --> W2[WorkerOCServer::Init 日志停在哪步]
-  W2 -->|etcd/metastore 地址| W3[L0 gflags]
-  W2 -->|EtcdStore Init/Auth| W4[L2 etcd + L0 账号]
-  W2 -->|etcd cluster manager init failed| W5[L2 Watch/Revision + L3 EtcdClusterManager]
-  W2 -->|replica / InitializeAllServices| W6[L3 服务装配 + RocksDB]
-  W2 -->|UDS bind| W7[L1 目录权限 / unix_domain_socket_dir]
+  W2 -->|etcd/metastore 地址| W3[L0（集成方） gflags]
+  W2 -->|EtcdStore Init/Auth| W4[L2（三方件） etcd + L0（集成方） 账号]
+  W2 -->|etcd cluster manager init failed| W5[L2（三方件） Watch/Revision + L3（数据系统） EtcdClusterManager]
+  W2 -->|replica / InitializeAllServices| W6[L3（数据系统） 服务装配 + RocksDB]
+  W2 -->|UDS bind| W7[L1（平台与网络） 目录权限 / unix_domain_socket_dir]
 ```
 
 **证据**：`worker_oc_server.cpp` `Init` 顺序；`etcd_cluster_manager.cpp` `Init`。
@@ -489,10 +491,10 @@ flowchart TD
 ```mermaid
 flowchart TD
   X1[现象: HealthCheck / Get / Set] --> X2{码}
-  X2 -->|K_SCALE_DOWN 31| X3[L3 WorkerOC HealthCheck + etcd 退出位]
-  X2 -->|K_SCALING 32 on write| X4[L3 MultiPublish 重试 + Master 迁移]
-  X2 -->|Get OK but last_rc 32| X5[L3 元数据迁移中; 业务是否处理 per-key]
-  X2 -->|客户端连旧地址| X6[L0 服务发现 / L1 网络]
+  X2 -->|K_SCALE_DOWN 31| X3[L3（数据系统） WorkerOC HealthCheck + etcd 退出位]
+  X2 -->|K_SCALING 32 on write| X4[L3（数据系统） MultiPublish 重试 + Master 迁移]
+  X2 -->|Get OK but last_rc 32| X5[L3（数据系统） 元数据迁移中; 业务是否处理 per-key]
+  X2 -->|客户端连旧地址| X6[L0（集成方） 服务发现 / L1（平台与网络） 网络]
 ```
 
 **证据**：[`scaling_scale_down_sequences.puml`](../flows/sequences/kv-client/scaling_scale_down_sequences.puml)。
@@ -503,13 +505,13 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  L1[Get 慢/失败] --> L2{① stub Get RPC}
-  L2 -->|1002/1001| L3[§9 TCP]
-  L2 -->|OK| L4{last_rc / object 级错误}
-  L4 -->|K_NOT_FOUND| L5[L3 真无 key 或租户 URI]
-  L4 -->|K_NOT_FOUND_IN_L2CACHE 26| L6[L3 L2 路径 + 盘 IO L1]
-  L4 -->|OK + ⑥ mmap| L7[sdk-init §8 GetClientFd / mmap]
-  L2 -->|UB WARNING fallback| L8[§10.1 走 TCP payload; 查 OOM/上限]
+  N1[Get 慢/失败] --> N2{① stub Get RPC}
+  N2 -->|1002/1001| N3[§9 TCP]
+  N2 -->|OK| N4{last_rc / object 级错误}
+  N4 -->|K_NOT_FOUND| N5[L3（数据系统） 真无 key 或租户 URI]
+  N4 -->|K_NOT_FOUND_IN_L2CACHE 26| N6[L3（数据系统） L2 路径 + 盘 IO L1（平台与网络）]
+  N4 -->|OK + ⑥ mmap| N7[sdk-init §8 GetClientFd / mmap]
+  N2 -->|UB WARNING fallback| N8[§10.1 走 TCP payload; 查 OOM/上限]
 ```
 
 ### 12.5 KV 读（远端：跨 Worker + UB）
@@ -522,8 +524,8 @@ flowchart TD
   R2 -->|失败| R3[§9 TCP]
   R2 -->|OK| R4{④⑤ UB / TCP payload}
   R4 -->|1004/1006/1008| R5[§10 UB + 对端 Worker URMA]
-  R4 -->|OK 数据错| R6[L3 数据面 Worker + URMA 写完整性]
-  R2 -->|OK 元数据错| R7[L3 ② 元数据 Worker / Master]
+  R4 -->|OK 数据错| R6[L3（数据系统） 数据面 Worker + URMA 写完整性]
+  R2 -->|OK 元数据错| R7[L3（数据系统） ② 元数据 Worker / Master]
   R1 --> R8[对比: 本机入口 vs 跨机入口 ① RTT]
 ```
 
@@ -534,9 +536,9 @@ flowchart TD
   P1[Set/MSet/Publish] --> P2{MultiPublish / Publish}
   P2 -->|K_SCALING| P3[§12.3 + etcd]
   P2 -->|1002 SHM/UB 建连| P4[§9 + §10 PipelineDataTransferHelper]
-  P2 -->|K_NO_SPACE / K_IO_ERROR| P5[L1 磁盘 + L3 L2/eviction]
-  P2 -->|K_WRITE_BACK_QUEUE_FULL| P6[L3 Worker 写回压力]
-  P2 -->|K_OC_ALREADY_SEALED| P7[业务幂等 / L3 语义]
+  P2 -->|K_NO_SPACE / K_IO_ERROR| P5[L1（平台与网络） 磁盘 + L3（数据系统） L2/eviction]
+  P2 -->|K_WRITE_BACK_QUEUE_FULL| P6[L3（数据系统） Worker 写回压力]
+  P2 -->|K_OC_ALREADY_SEALED| P7[业务幂等 / L3（数据系统） 语义]
 ```
 
 **证据**：`ClientWorkerRemoteApi::Publish` / `MultiPublish`；`ClientWorkerBaseApi::PipelineDataTransferHelper`（UB Put 流水线）。
