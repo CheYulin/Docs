@@ -1,0 +1,36 @@
+@startuml kv_client_read_path_normal_sequence
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam defaultFontName "SansSerif"
+
+title 关键读写路径：正常（本机 Worker 为入口，Case 清单「正常读写」步骤 1～6）
+
+actor "Client\n(集成 SDK)" as C
+participant "Worker1\n入口·本机" as W1
+participant "Worker2\n元数据" as W2
+participant "Worker3\n数据面" as W3
+
+C -> W1 : ① 本机 TCP（Get 等）
+activate W1
+
+W1 -> W2 : ② 跨机 TCP（元数据访问）
+activate W2
+W2 --> W1
+deactivate W2
+
+W1 -> W3 : ③ 跨机 TCP（触发数据拉取）
+activate W3
+
+W3 -> W1 : ④ 跨机 URMA write
+W3 -> W1 : ⑤ 跨机 TCP（get resp，timeout 时或带对端 IP:Port）
+deactivate W3
+
+W1 -> C : ⑥ 本地共享内存（返回偏移等）
+deactivate W1
+
+note right of C
+  客户侧通常直接可见：①、⑥ 与整次 SLI；
+  ②～⑤ 需 Worker 日志 / 平台协助定界。
+end note
+
+@enduml

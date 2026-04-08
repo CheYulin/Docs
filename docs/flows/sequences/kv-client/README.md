@@ -13,3 +13,5 @@
 | [scaling_scale_down_sequences.puml](scaling_scale_down_sequences.puml) | K_SCALING / K_SCALE_DOWN 时序（与 operations 长文一致） |
 
 **故障处理类配图**（UB/etcd/SDK 等）见 [`../../reliability/diagrams/kv-client/`](../../reliability/diagrams/kv-client/)。
+
+**故障现象 / 责任边界 / 数据系统内模块**（与上表时序图对照）：[`../../observable/kv-场景-故障分类与责任边界.md`](../../observable/kv-场景-故障分类与责任边界.md)。

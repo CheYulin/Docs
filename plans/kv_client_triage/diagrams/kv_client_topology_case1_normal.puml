@@ -1,0 +1,45 @@
+@startuml kv_topology_case1_normal
+skinparam ParticipantPadding 22
+skinparam BoxPadding 12
+
+title Case 1：正常路径 — 本机入口 Worker（W1）\nSHM 仅 Client 与 W1；W2/W3 仅在需跨节点时出现。
+
+participant "业务进程\n(KVClient)" as C
+participant "本机入口 Worker\n(W1)" as W1
+participant "元数据 Worker\n(W2)" as W2
+participant "数据 Owner\n(W3)" as W3
+
+note over C, W1
+  SHM / fd / mmap：仅 C 与 W1 之间
+end note
+
+C -> W1 : TCP/UDS RPC（Get 等）
+C <-> W1 : 共享内存数据面（若启用）
+
+alt ① 本地缓存命中（W1 热数据）
+  note over W1
+    对象在 W1 内存/本地缓存中即命中：
+    除本次 Client→W1 的 Get 外，
+    不再向 W2、W3 发起任何集群内 RPC。
+  end note
+  W1 -> W1 : 缓存命中，直接组装 GetRsp
+else ② 本机命中但非缓存热路径（例：落盘读，仍不出本机）
+  W1 -> W1 : 本地元数据 + 本地读（无跨节点 RPC）
+else ③ 需要跨节点（查元数据 / 拉 Owner）
+  box "跨节点（集群内）" #FFF8E1
+    W1 -> W2 : 跨节点 TCP ①：元数据查询\n（如 GetObjMetaInfo、路由）
+    W2 --> W1 : 元数据响应
+    W1 -> W3 : 跨节点 TCP ②：触发拉取 / 协调
+    W3 --> W1 : URMA Write 或 TCP ③：数据回传
+  end box
+  note right of W2
+    W2 常与 W1 不同节点；元数据在本地时可退化为 W1 内部调用。
+  end note
+  note right of W3
+    W3 为对象所在节点；与 cases 中 worker3→worker1 路径一致。
+  end note
+end
+
+W1 --> C : GetRsp +（本机路径）SHM 描述或 payload
+
+@enduml

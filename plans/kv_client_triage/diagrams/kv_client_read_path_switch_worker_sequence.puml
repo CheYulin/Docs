@@ -1,0 +1,36 @@
+@startuml kv_client_read_path_switch_worker_sequence
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam defaultFontName "SansSerif"
+
+title 关键读写路径：SDK 切流后（入口 Worker 变化，Case 清单「Client 故障 / 切流异常」步骤 1～6）
+
+actor "Client\n(集成 SDK)" as C
+participant "Worker2\n入口·跨机" as W2
+participant "Worker3\n元数据" as W3
+participant "Worker4\n数据面" as W4
+
+C -> W2 : ① 跨机 TCP（首跳即跨机，timeout 更敏感）
+activate W2
+
+W2 -> W3 : ② 跨机 TCP（元数据访问）
+activate W3
+W3 --> W2
+deactivate W3
+
+W2 -> W4 : ③ 跨机 TCP（触发数据拉取）
+activate W4
+
+W4 -> W2 : ④ 跨机 URMA write
+W4 -> W2 : ⑤ 跨机 TCP（get resp）
+deactivate W4
+
+W2 -> C : ⑥ 本地共享内存（返回偏移等）
+deactivate W2
+
+note right of C
+  与「正常路径」相比：① 已跨机；
+  Init、connectTimeout、网络策略更关键（见主文 10.3、8）。
+end note
+
+@enduml

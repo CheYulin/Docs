@@ -1,0 +1,37 @@
+@startuml fault_handling_sdk_etcd_failover
+' 避免 ** 与部分渲染器 Creole 冲突；避免 note bottom of（旧版 PlantUML 不支持）
+skinparam ParticipantPadding 20
+skinparam defaultFontName "SansSerif"
+
+title 组件层：SDK 心跳切流与 etcd 租约隔离（秒级窗口）
+
+participant "业务进程\n(KVC SDK)" as SDK
+participant "当前 KVC Worker" as Wbad
+participant "其他 KVC Worker" as Wok
+participant "etcd" as ETCD
+
+== 正常运行 ==
+SDK -> Wbad : 读写 / 心跳
+
+== Worker 故障 ==
+note over SDK
+  SDK 心跳超时约 2s（可调）
+  检测对端故障后切流到健康 Worker
+end note
+SDK -x Wbad : 心跳失败
+SDK -> Wok : 自动切流，后续请求
+
+Wbad -> ETCD : 租约无法续期
+note over ETCD, Wok
+  etcd 侧约 2s（可调）未收到心跳
+  其他节点故障隔离小于约 3s
+end note
+ETCD -> Wok : 成员与路由更新
+
+note right of SDK
+  切换前请求可能失败.
+  隔离完成前路由到故障节点的请求可能失败.
+  与 cases 文档中时间指标、2/N 粗算一致.
+end note
+
+@enduml

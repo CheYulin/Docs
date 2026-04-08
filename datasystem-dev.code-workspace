@@ -1,0 +1,17 @@
+{
+  "folders": [
+    {
+      "name": "vibe-coding-files",
+      "path": "."
+    },
+    {
+      "name": "yuanrong-datasystem",
+      "path": "../yuanrong-datasystem"
+    },
+    {
+      "name": "vibe-observability",
+      "path": "./workspace/observability"
+    }
+  ],
+  "settings": {}
+}

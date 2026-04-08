@@ -1,0 +1,24 @@
+@startuml fault_handling_data_reliability
+skinparam shadowing false
+
+title 数据可靠性：异步持久化与故障后预加载（概要）
+
+start
+partition "**稳态**" {
+  :业务读写内存缓存;
+  :各 Worker **异步**写二级存储\n分片聚合、周期性 Compact;
+}
+
+partition "**故障隔离后**" {
+  :分片迁移至健康节点;
+  :目的节点从二级存储 **预加载**;
+  note right
+    加载完成前读可能报错
+    未落盘数据可能丢失
+  end note
+  :预加载完成后恢复读写;
+}
+
+stop
+
+@enduml

@@ -1,0 +1,43 @@
+@startuml kv_topology_case2_remote_switch
+skinparam ParticipantPadding 22
+skinparam BoxPadding 12
+
+title Case 2：SDK 切流 — Client 只连远端入口（W1'）\n无 Client↔远端 SHM；W1' 内缓存命中时同样不向 W2/W3 发 RPC。
+
+participant "业务进程\n(KVClient)" as C
+participant "远端入口 Worker\n(W1' 切流目标)" as W1p
+participant "元数据 Worker\n(W2)" as W2
+participant "数据 Owner\n(W3)" as W3
+
+note over C, W1p
+  Client 仅与 W1' 走 TCP/RPC（无跨机 SHM）
+end note
+
+C -> W1p : 跨机 TCP/RPC（Get 等）
+
+alt ① 本地缓存命中（W1' 热数据）
+  note over W1p
+    对象在 W1' 内存/本地缓存即命中：
+    除本次 Client→W1' 的 Get 外，
+    不向 W2、W3 发起集群内 RPC。
+  end note
+  W1p -> W1p : 缓存命中，直接组装 GetRsp
+else ② 本机命中但非缓存热路径（仍不出 W1'）
+  W1p -> W1p : 本地元数据 + 本地读（无跨节点 RPC）
+else ③ 需要跨节点（与 Case1 ③ 同构）
+  box "跨节点（集群内，对 Client 透明）" #FFF8E1
+    W1p -> W2 : 跨节点 TCP ①：元数据查询
+    W2 --> W1p : 元数据响应
+    W1p -> W3 : 跨节点 TCP ②：拉取 / 协调
+    W3 --> W1p : URMA Write 或 TCP ③：数据回传
+  end box
+end
+
+W1p --> C : GetRsp + RPC payload（非 SHM）
+
+note right of W1p
+  W1' 为切流后的入口；①② 与 Case1 区分方式相同，
+  仅 Client 到入口的链路变为跨机。
+end note
+
+@enduml

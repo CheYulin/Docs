@@ -1,0 +1,31 @@
+@startuml fault_handling_etcd_degradation
+hide empty description
+skinparam shadowing false
+
+title 第三方：etcd 故障模式与 KVC 行为（概要）
+
+state "etcd 集群正常\n(HA)" as Normal
+state "单节点 etcd 故障" as Single
+state "续租失败 / 单链路" as Lease
+state "全部 etcd 不可用" as AllDown
+
+[*] --> Normal
+
+Normal : 无额外影响
+Single : 集群容错，通常无影响
+Lease : 触发故障隔离\n（见 fault_handling_sdk_etcd_failover）
+AllDown : 降级：缓存集群视图；\n数据面在方案前提下可保持；\n扩缩容/隔离受影响
+
+Normal --> Single : 单副本故障
+Normal --> Lease : 网络分区等
+Normal --> AllDown : 灾难场景
+
+Single --> Normal : 恢复
+Lease --> Normal : 恢复
+AllDown --> Normal : etcd 恢复
+
+note bottom of AllDown
+  与 FAULT_HANDLING §四 表一致；以现网版本为准
+end note
+
+@enduml

@@ -1,0 +1,50 @@
+eBPF / bpftrace：把用户态栈符号做全（推荐按顺序做）
+================================================
+
+A) 编译侧（必做，否则只剩裸地址）
+--------------------------------
+1. 使用带调试信息的构建，并保留 frame pointer，便于栈展开：
+
+   cmake -S . -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+     -DCMAKE_CXX_FLAGS="-fno-omit-frame-pointer -g" \
+     -DCMAKE_C_FLAGS="-fno-omit-frame-pointer -g"
+   cmake --build build --target ds_st_kv_cache -j"$(nproc)"
+
+2. 对 FetchContent 编出来的 gRPC/ZMQ 等 .so：若仍为 stripped，需在对应
+   ExternalProject/CMake 里打开 debug 或安装 *-dbg 包（视你们环境而定）。
+
+B) 运行 bpftrace 前（符号解析器）
+--------------------------------
+1. 安装 llvm-symbolizer（包名因发行版而异，如 llvm / llvm-tools）。
+
+2. 在**同一个要执行 sudo 的 shell**里：
+
+   source scripts/perf/bpftrace/env_for_symbols.sh
+   sudo -E bash scripts/perf/trace_kv_lock_io_bpftrace.sh
+
+   （sudo -E 把 LLVM_SYMBOLIZER_PATH、BPFTRACE_* 带进 root 环境。）
+
+C) 后处理（maps + 地址 → 符号）
+--------------------------------
+bpftrace 结束后进程已退出，内置符号可能不全。可在测试**仍在跑**的另一终端抓取 maps：
+
+   pgrep -nx ds_st_kv_cache | xargs -I{} cat /proc/{}/maps > /tmp/ds_maps.txt
+
+然后：
+
+   python3 scripts/perf/bpftrace/symbolize_bpftrace_stacks.py \
+     --maps /tmp/ds_maps.txt \
+     workspace/observability/bpftrace/trace_XXXX_stacks.txt \
+     -o workspace/observability/bpftrace/trace_XXXX_stacks.sym.txt
+
+D) 备用：perf（dwarf 栈往往更全）
+--------------------------------
+若 bpftrace 仍不理想，可用 dwarf 调用图（需调试信息 + 足够权限）：
+
+   bash scripts/perf/perf_record_kv_lock_io.sh --build-dir build
+
+   然后：
+
+   perf report -i workspace/observability/perf/kv_lock_io.perf.data --no-children
+
+（脚本会写 data 路径到标准输出。）

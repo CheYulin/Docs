@@ -1,0 +1,51 @@
+@startuml kv_client_triage_doc_map
+skinparam shadowing false
+skinparam roundcorner 6
+skinparam defaultFontName "SansSerif"
+
+title kv_client_triage 文档关联（逻辑分层）
+
+package "L1 框架与定义" as L1 {
+  rectangle "KV_CLIENT_E2E_FRAMEWORK_AND_TRIAGE" as E2E
+  rectangle "KV_CLIENT_FAULT_SCOPE_AND_DEFINITIONS" as SCOPE
+  rectangle "KV_CLIENT_FAULT_TRIAGE_TREE" as TREE
+}
+
+package "L2 操作与业务素材" as L2 {
+  rectangle "KV_CLIENT_TRIAGE_PLAYBOOK" as PLAY
+  rectangle "cases.md" as CASES
+  rectangle "KV_CLIENT_CLIENT_PERSPECTIVE_REPORTS" as REPORT
+}
+
+package "L3 方案与深度专题" as L3 {
+  rectangle "FAULT_HANDLING_AND_DATA_RELIABILITY" as FH
+  rectangle "REMOTE_META_VS_DATA_FAILURE_OBSERVABILITY" as REMOTE
+  rectangle "CLIENT_WORKER_AND_WORKER_WORKER_LINK_FAILURE_ANALYSIS" as LINK
+}
+
+package "L4 配图" as L4 {
+  rectangle "diagrams (puml)" as DIAG
+}
+
+rectangle "README.md\n(入口与阅读路径)" as README
+
+README --> E2E
+README --> PLAY
+E2E --> PLAY
+E2E --> TREE
+E2E --> FH
+SCOPE --> TREE
+SCOPE --> PLAY
+PLAY --> CASES
+CASES --> REPORT
+REPORT --> FH
+TREE --> CASES
+FH --> DIAG
+FH --> LINK
+FH --> REMOTE
+
+note bottom of README
+  详细说明与推荐阅读路径见同目录 README.md
+end note
+
+@enduml

@@ -1,0 +1,30 @@
+@startuml kv_client_deploy_interaction
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+
+title KVC 部署与交互（简图）
+
+rectangle "业务进程 / 计算节点" as APP {
+  component "KVC SDK\n(KVClient)" as SDK
+}
+
+rectangle "数据面：KVC Worker 集群" as WORKERS {
+  component "Worker A" as WA
+  component "Worker B" as WB
+}
+
+cloud "控制面：etcd\n(服务发现 / 租约)" as ETCD
+
+SDK --> WA : 读写 RPC、心跳
+SDK --> WB : 切流后 RPC、心跳
+WA --> ETCD : 注册 / 续租
+WB --> ETCD : 注册 / 续租
+SDK ..> ETCD : 发现 Worker\n(经客户端库，非直连业务代码)
+
+note bottom of SDK
+  典型交互：SDK 持当前 Worker 连接；
+  心跳失败则换 Worker；etcd 侧完成成员与隔离。
+end note
+
+@enduml

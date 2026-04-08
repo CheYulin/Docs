@@ -1,0 +1,74 @@
+@startuml scaling_scale_down_client_paths
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+skinparam defaultFontName "SansSerif"
+
+title K_SCALE_DOWN / K_SCALING：错误如何回到客户端（典型路径）
+
+== A. K_SCALE_DOWN：HealthCheck（客户端顶层可见） ==
+
+actor "业务 / 运维" as APP
+participant "KVClient / ObjectClient" as CLI
+participant "ClientWorkerRemoteApi" as API
+participant "Worker RPC Stub\n(自研 RPC 通道)" as STUB
+participant "WorkerOCServiceImpl" as WK
+participant "EtcdClusterManager" as ETCD
+
+APP -> CLI : HealthCheck()
+CLI -> API : HealthCheck(state)
+API -> STUB : HealthCheck(opts, req, rsp)
+STUB -> WK : HealthCheck RPC
+WK -> ETCD : CheckLocalNodeIsExiting()
+alt 节点正在退出
+  ETCD --> WK : true
+  WK --> STUB : Status K_SCALE_DOWN\nWorker is exiting now
+else 正常
+  ETCD --> WK : false
+  WK --> STUB : OK
+end
+STUB --> API : 同上 Status
+API --> CLI : 同上
+CLI --> APP : Status 码 31 或 OK\n无 RetryOnError
+
+== B. K_SCALING：MultiPublish 元数据（客户端会按码重试） ==
+
+APP -> CLI : Set / MSet 等下沉到 MultiPublish
+CLI -> API : MultiPublish(...)
+loop RetryOnError 含 K_SCALING
+  API -> STUB : MultiPublish RPC
+  STUB -> WK : MultiPublish / CreateMultiMeta 链
+  alt meta 仍在 moving 循环重试
+    WK --> STUB : 继续等待 Master
+  else moving 结束仍失败
+    WK --> STUB : Status K_SCALING\nThe cluster is scaling...
+  end
+  STUB --> API : K_SCALING
+  API -> API : 消耗预算重试
+end
+API --> CLI : 最终 OK 或耗尽超时等
+note right of API
+  仅 MultiPublish 把 K_SCALING\n列入重试集合
+end note
+
+== C. Get：last_rc 为 K_SCALING 时（不重试、顶层可能仍 OK） ==
+
+APP -> CLI : Get
+CLI -> API : Get(getParam, rsp, payloads)
+loop RetryOnError 不含 K_SCALING
+  API -> STUB : Get RPC
+  STUB -> WK : Get
+  WK --> STUB : RPC OK + rsp.last_rc\n可能含 32
+  STUB --> API : stub OK
+  API -> API : recvStatus = last_rc
+  alt K_TRY_AGAIN 或 RPC 超时类或 OOM 全失败
+    API --> API : return recvStatus 触发重试
+  else last_rc == K_SCALING
+    API --> API : return OK 结束 RetryOnError
+  end
+end
+API --> CLI : 常返回顶层 OK\n错误可能在 objects 内
+note right of CLI
+  Access log 的 code 取决于\n上层是否把 per-object\n错误提升为 Status
+end note
+
+@enduml

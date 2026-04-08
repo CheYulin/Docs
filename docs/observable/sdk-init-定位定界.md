@@ -4,6 +4,10 @@
 
 **代码仓库**：`yuanrong-datasystem`（下文路径均相对该仓库根目录）。
 
+**配套（多场景责任边界、KV 读写与 Worker 扩缩容）**：[kv-场景-故障分类与责任边界.md](./kv-场景-故障分类与责任边界.md)。
+**KV 读接口专项（基于 `kv_client.h`）**：[kv-client-读接口-定位定界.md](./kv-client-读接口-定位定界.md)。
+**KV 写接口专项（基于 `kv_client.h`）**：[kv-client-写接口-定位定界.md](./kv-client-写接口-定位定界.md)。
+
 ---
 
 ## 1. 接口与入口

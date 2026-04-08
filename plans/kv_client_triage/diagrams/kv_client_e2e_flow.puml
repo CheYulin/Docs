@@ -1,0 +1,55 @@
+@startuml KVClient_E2E
+skinparam backgroundColor #FEFEFE
+
+title KVClient 客户端视角：一次读写主路径（活动图）\n说明见同目录 README
+
+|KVClient|
+start
+:DispatchKVSync(…);
+note right
+  未配置 Executor 则当前线程直接执行
+  异常时可能 **K_RUNTIME_ERROR**
+end note
+
+|ObjectClientImpl|
+:IsClientReady();
+note right
+  **K_NOT_READY**：未 INITIALIZED
+end note
+
+:GetAvailableWorkerApi();
+note right
+  取 **currentNode_** 对应 **workerApi**
+  **CheckConnection** → ListenWorker
+end note
+
+:CheckConnection / ListenWorker;
+note right
+  **K_RUNTIME_ERROR**：listenWorker 异常
+  **K_CLIENT_WORKER_DISCONNECT**：首心跳失败等
+end note
+
+partition "读路径 Get（与写路径二选一）" {
+  :GetBuffersFromWorker\n→ workerApi->Get(RPC);
+  note right
+    UB：可能先 **GetObjMetaInfo**
+    远端重试码：**K_TRY_AGAIN**、K_RPC_* 系列、
+    **K_OUT_OF_MEMORY**、**K_SCALING** 等
+  end note
+  :ProcessGetResponse\n→ mmap / payload;
+  note right
+    部分 key 失败时 Status 仍可能 OK
+    全失败见 **last_rc** / **K_NOT_FOUND**
+  end note
+}
+
+partition "写路径 Set / Create / Publish" {
+  :Create / MemoryCopy / Publish;
+  note right
+    SHM 或 URMA 发送
+    **K_RPC_UNAVAILABLE**：如 shm 建连失败
+  end note
+}
+
+stop
+@enduml

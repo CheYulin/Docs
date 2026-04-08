@@ -1,0 +1,24 @@
+@startuml fault_handling_ub_plane_and_tcp
+skinparam shadowing false
+
+title 通信层：UB 多平面与单平面故障（时延口径与 cases 一致）
+
+start
+:URMA 多平面、多路径\n分散链路拥塞;
+if (单平面故障？) then (是)
+  :多平面切换 +\n**TCP 兜底**（全 UB 故障时）;
+  note right
+    **硬件侧平面故障感知 ~128ms 量级**
+    检测 + 平面切换整体 **~133ms（128+5ms）**
+    见 cases「UB 链路故障」
+  end note
+else (否)
+  :正常 URMA 路径;
+endif
+note left
+  用户 RPC 超时（如 20ms）与 128ms 感知
+  不同量级；短超时见 REMOTE §4.5
+end note
+stop
+
+@enduml

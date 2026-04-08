@@ -1,0 +1,88 @@
+/*
+ * bpftrace: aggregate user stacks on blocking syscalls (client test binary).
+ *
+ * Prereqs: Linux + bpftrace (apt/dnf), typically root. WSL2 may lack usable eBPF/BTF.
+ *
+ * Comm filter: TASK_COMM_LEN=16. Default matches ds_st_kv_cache (15 chars).
+ * To trace another short name, edit the four /comm == .../ predicates below.
+ *
+ * Run via wrapper (sets LD_LIBRARY_PATH):
+ *   sudo bash scripts/perf/trace_kv_lock_io_bpftrace.sh
+ */
+
+BEGIN {
+  printf("Tracing syscalls for comm == ds_st_kv_cache (edit script to change)\n");
+  printf("Ctrl+C to print aggregated stacks.\n");
+}
+
+tracepoint:syscalls:sys_enter_futex
+/comm == "ds_st_kv_cache"/
+{
+  @futex[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_epoll_wait
+/comm == "ds_st_kv_cache"/
+{
+  @epoll[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_epoll_pwait
+/comm == "ds_st_kv_cache"/
+{
+  @epoll[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_poll
+/comm == "ds_st_kv_cache"/
+{
+  @poll[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_ppoll
+/comm == "ds_st_kv_cache"/
+{
+  @poll[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_recvfrom
+/comm == "ds_st_kv_cache"/
+{
+  @net[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_sendto
+/comm == "ds_st_kv_cache"/
+{
+  @net[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_read
+/comm == "ds_st_kv_cache"/
+{
+  @rw[ustack(64)] = count();
+}
+
+tracepoint:syscalls:sys_enter_write
+/comm == "ds_st_kv_cache"/
+{
+  @rw[ustack(64)] = count();
+}
+
+END {
+  printf("\n--- futex (top 25) ---\n");
+  print(@futex, 25);
+  printf("\n--- epoll_wait/pwait (top 20) ---\n");
+  print(@epoll, 20);
+  printf("\n--- poll/ppoll (top 20) ---\n");
+  print(@poll, 20);
+  printf("\n--- recvfrom/sendto (top 20) ---\n");
+  print(@net, 20);
+  printf("\n--- read/write (top 15) ---\n");
+  print(@rw, 15);
+  clear(@futex);
+  clear(@epoll);
+  clear(@poll);
+  clear(@net);
+  clear(@rw);
+}

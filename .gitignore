@@ -1,0 +1,22 @@
+# Local verification outputs (see results/README.md)
+/results/*
+!/results/README.md
+
+# Large intermediate run artifacts under plans
+/plans/**/runs/
+
+# Local workspace binaries and outputs (keep docs)
+/workspace/*
+!/workspace/README.md
+
+# Local Python virtual environment
+/.venv-fm/
+
+# Cursor local metadata (keep shareable rules if needed)
+/.cursor/*
+!/.cursor/rules/
+!/.cursor/rules/**
+
+# Python bytecode caches
+*.pyc
+__pycache__/
