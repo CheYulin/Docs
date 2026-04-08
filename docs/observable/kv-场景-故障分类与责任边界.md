@@ -5,6 +5,7 @@
 **配套**：
 
 - SDK Init 详版：[sdk-init-定位定界.md](./sdk-init-定位定界.md)
+- Worker 启动故障详版：[worker-启动故障-定位定界.md](./worker-启动故障-定位定界.md)
 - 序列图目录：[docs/flows/sequences/kv-client/README.md](../flows/sequences/kv-client/README.md)
 
 **深度展开**（本文 **§9～§12**）：TCP(ZMQ) 与 UB(URMA) 的 **错误码 → 日志 → 源码位置**，以及 **总体 + 分场景排查树**（Mermaid）；无法渲染 Mermaid 时可直接读图中节点文字作检查清单。
@@ -15,13 +16,98 @@
 
 | 层级 | 含义 | 典型归属 |
 |------|------|----------|
-| **L0 集成方** | 业务进程配置、超时、并发、是否自建本地缓存、K8s 探针与资源限额 | 业务 / 集成团队 |
-| **L1 平台与网络** | 节点互通、安全组、DNS、端口监听、磁盘挂载、内核参数、宿主机 OOM | 平台 / SRE / 网络 |
-| **L2 三方件** | etcd 可用性与性能、共享存储（若有）、观测系统 | 中间件 / 平台（视部署约定） |
-| **L3 数据系统** | Worker / Master / SDK 逻辑、RPC、SHM/URMA、元数据与数据面协同 | 数据系统团队 |
-| **L3 内子模块** | 见文末 **§8 模块索引**，用于「是数据系统问题时的细分」 | 研发内部分工 |
+| **L0（集成方）** | 业务进程配置、超时、并发、是否自建本地缓存、K8s 探针与资源限额 | 业务 / 集成团队 |
+| **L1（平台与网络）** | 节点互通、安全组、DNS、端口监听、磁盘挂载、内核参数、宿主机 OOM | 平台 / SRE / 网络 |
+| **L2（三方件）** | etcd 可用性与性能、共享存储（若有）、观测系统 | 中间件 / 平台（视部署约定） |
+| **L3（数据系统）** | Worker / Master / SDK 逻辑、RPC、SHM/URMA、元数据与数据面协同 | 数据系统团队 |
+| **L3（数据系统）内子模块** | 见文末 **§8 模块索引**，用于「是数据系统问题时的细分」 | 研发内部分工 |
 
 **自证要点**：用 **同一时间线** 对齐 **客户端 `Status::ToString()` / 访问日志**、**入口 Worker 日志**、**etcd 事件**（若可拿）；避免仅凭 `K_RPC_UNAVAILABLE` 定责到单一侧（见 [sdk-init-定位定界.md §10](./sdk-init-定位定界.md)）。
+
+---
+
+## 0.1 方案必须回答的四个问题（评审检查清单）
+
+## A. 感知和定界流程（依赖 URMA/硬件/通信链路）
+
+**客户先看哪些指标**
+- SLI：`success_rate`、读/写 `p99`
+- 错误码分布：`1002/1001/1000/19`（TCP/RPC），`1004/1006/1008`（UB/URMA），`25/14`（etcd）
+- 资源与链路：重传率、连接失败率、Worker 心跳状态、etcd 访问成功率
+
+**定界流程（5 步）**
+1. 先看影响面：全局、单 AZ、单 Worker、单客户端。
+2. 看码桶：先分 TCP/RPC、UB、etcd、资源、生命周期。
+3. 看请求是否到达入口 Worker（有无入口日志）。
+4. 看分段耗时（①~⑥）定位慢点/断点。
+5. 输出结论：责任层级 + 数据系统内部模块 + 恢复动作。
+
+**依赖哪些服务/数据源**
+- 指标平台（Grafana）
+- 日志平台（客户端日志、Worker 日志、第三方访问日志）
+- 控制面（etcd 健康与租约）
+- 可选：网络/OS 现场工具（抓包、perf/ftrace）
+
+## B. 自证清白（返回哪些指标和错误码，如何返回，精度保证）
+
+**返回/暴露方式**
+- 接口返回：`StatusCode + msg`（SDK API 直接返回）
+- 日志返回：接口日志、运行日志、第三方访问日志（附时间窗和关键字段）
+- 指标返回：错误码计数、成功率、p99、分段时延、重试次数
+
+**最小自证证据包（一次事件）**
+- 事件时间窗（起止时间）
+- 影响范围（集群/AZ/Worker/client）
+- 错误码分布（TopN）
+- 入口 Worker 是否收到请求（有/无入口日志）
+- 分段耗时（至少入口 RPC、跨 Worker、UB 段）
+- 依赖侧健康（etcd、网络重传、资源）
+
+**精确度保证**
+- 统一 trace_id / request_id 贯穿 SDK 与 Worker
+- 日志时间同步（同一时区与毫秒级时间戳）
+- 同一时间窗做多源对齐（日志、指标、控制面）
+- 同时满足“状态码 + 日志 + 分段耗时”三证合一才下定责结论
+
+**分布式快速定位示例**
+- `1002` 突增 -> 查入口 Worker 有无 Get/Publish 入口日志：
+  - 无入口：优先 L1（平台与网络）
+  - 有入口且内部超时：优先 L3（数据系统）再下钻模块
+- `1006` 突增 + UB 段变慢：优先 UB/URMA 依赖链路，记录端点对做自证
+
+## C. KVC 软件故障梳理（识别 -> 恢复）
+
+**识别维度**
+- 启动类：Init 链路失败（etcd、参数、UDS、服务装配）
+- 读路径：入口超时、远端拉取失败、L2 未命中、UB fallback
+- 写路径：multi publish moving、master 交互失败、L2 落盘失败
+- 生命周期：`K_SCALE_DOWN`、`K_SCALING`、心跳异常
+- 资源类：`K_OUT_OF_MEMORY`、`K_NO_SPACE`、fd/mmap 异常
+
+**恢复策略模板**
+- 链路类：重试 -> 切流/降级（UB->TCP）-> 隔离实例
+- 控制面类：etcd 恢复后自动收敛，必要时人工重启
+- 存储类：降级运行 + 告警，修复后恢复可靠性等级
+- 软件内部类：按模块止血（限流/降级）+ 发布修复
+
+## D. 测试演练（验证定位定界能力）
+
+**演练目标**
+- 证明“能感知、能定界、能恢复、能复盘”
+- 验证“非我方责任”可被证据链证明
+
+**用例构造建议**
+- TCP 故障：注入超时/断连/重传，验证 `1002/1001` 与入口日志分叉
+- UB 故障：注入 `1006`、completion 异常、fallback 触发，验证性能与功能分离
+- etcd 故障：降可用、watch 延迟、租约异常，验证 `25/14` 与扩缩容影响
+- 存储故障：IO 慢/失败/空间不足，验证 `K_IO_ERROR/K_NO_SPACE` 与降级策略
+- 软件故障：模拟 master 交互失败、moving 持续，验证 `K_SCALING` 与重试上限
+
+**演练验收项**
+- 1 分钟内给出责任域初判
+- 3 分钟内给出模块级定位
+- 5 分钟内给出恢复动作并执行
+- 产出复盘：证据包、误判点、规则优化项
 
 ---
 
@@ -31,14 +117,14 @@
 
 | 现象 | 故障分类 | 优先排查 | 责任边界（默认） |
 |------|----------|----------|------------------|
-| 返回 `K_INVALID`（地址/超时参数） | 配置类 | ConnectOptions、服务发现 | **L0** |
-| `CreateClientCredentials` / CURVE 失败 | 安全通道配置 | 密钥、是否启用 Curve | **L0 + L3**（密钥分发约定） |
-| `Get socket path failed` / `K_RPC_*` | 网络或 Worker 未就绪 | 端口、防火墙、Worker 进程 | **L1** 或 **L3**（未启动） |
-| `Register client failed` + `Authenticate failed` | IAM | Token/AK-SK/租户 | **L0 + L3** |
-| `Cannot receive heartbeat from worker` (23) | 注册后心跳路径 | `connectTimeoutMs`、Worker 负载 | **L1 + L3** |
-| FD 交换 / `mmap` 失败（业务前已部分在 Init 后路径） | SHM/UDS/内核 | 见 SDK Init 手册 §8 | **L1 + L3** |
+| 返回 `K_INVALID`（地址/超时参数） | 配置类 | ConnectOptions、服务发现 | **L0（集成方）** |
+| `CreateClientCredentials` / CURVE 失败 | 安全通道配置 | 密钥、是否启用 Curve | **L0（集成方） + L3（数据系统）**（密钥分发约定） |
+| `Get socket path failed` / `K_RPC_*` | 网络或 Worker 未就绪 | 端口、防火墙、Worker 进程 | **L1（平台与网络）** 或 **L3（数据系统）**（未启动） |
+| `Register client failed` + `Authenticate failed` | IAM | Token/AK-SK/租户 | **L0（集成方） + L3（数据系统）** |
+| `Cannot receive heartbeat from worker` (23) | 注册后心跳路径 | `connectTimeoutMs`、Worker 负载 | **L1（平台与网络） + L3（数据系统）** |
+| FD 交换 / `mmap` 失败（业务前已部分在 Init 后路径） | SHM/UDS/内核 | 见 SDK Init 手册 §8 | **L1（平台与网络） + L3（数据系统）** |
 
-### 1.2 数据系统内链路（若判为 L3）
+### 1.2 数据系统内链路（若判为 L3（数据系统））
 
 `ObjectClientImpl::Init` → `RpcAuthKeyManager` → `InitClientWorkerConnect` → `ClientWorkerRemoteCommonApi::Connect`（`GetSocketPath` / UDS 握手 / `RegisterClient`）→ `ListenWorker` → `WorkerOCService_Stub` 建链。
 
@@ -63,12 +149,12 @@
 
 | 现象 | 故障分类 | 优先排查 | 责任边界 |
 |------|----------|----------|----------|
-| `Neither etcd_address nor metastore_address is specified` | 配置 | gflags / 部署模板 | **L0** |
-| `EtcdStore` 初始化/认证失败 | etcd 连接或账号 | etcd 端点、证书、用户密码 | **L2** 为主，配置错误为 **L0** |
-| `etcd cluster manager init failed` | 控制面一致性 | etcd Revision、Watch、时钟 | **L2 + L3**（`EtcdClusterManager`） |
-| `replica manager init failed` / `InitializeAllServices` 失败 | 多副本/服务装配 | 依赖服务、本地 RocksDB | **L3** |
-| `WorkerServiceImpl::Init` UDS 目录创建/bind 失败 | 本地文件系统权限 | `unix_domain_socket_dir`、SELinux | **L1** |
-| `ClientManager`/事件循环 Init 失败 | 本机 fd/epoll | ulimit、内核 | **L1 + L3** |
+| `Neither etcd_address nor metastore_address is specified` | 配置 | gflags / 部署模板 | **L0（集成方）** |
+| `EtcdStore` 初始化/认证失败 | etcd 连接或账号 | etcd 端点、证书、用户密码 | **L2（三方件）** 为主，配置错误为 **L0（集成方）** |
+| `etcd cluster manager init failed` | 控制面一致性 | etcd Revision、Watch、时钟 | **L2（三方件） + L3（数据系统）**（`EtcdClusterManager`） |
+| `replica manager init failed` / `InitializeAllServices` 失败 | 多副本/服务装配 | 依赖服务、本地 RocksDB | **L3（数据系统）** |
+| `WorkerServiceImpl::Init` UDS 目录创建/bind 失败 | 本地文件系统权限 | `unix_domain_socket_dir`、SELinux | **L1（平台与网络）** |
+| `ClientManager`/事件循环 Init 失败 | 本机 fd/epoll | ulimit、内核 | **L1（平台与网络） + L3（数据系统）** |
 
 ### 2.3 数据系统内模块
 

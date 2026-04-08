@@ -122,11 +122,11 @@ Worker 写入口：
 ## 6. 责任边界与模块落点
 
 - L0（集成方）：写入参数和调用模式问题
-- L1（OS/网络）：1002/reset、mmap/fd、磁盘/IO 资源
+- L1（平台与网络）：1002/reset、mmap/fd、磁盘/IO 资源
 - L2（三方件）：etcd 控制面、二级存储性能与可用性
 - L3（数据系统）：写入状态机、2PC/meta moving、重试和降级策略
 
-L3 优先模块：
+L3（数据系统）优先模块：
 - `worker_oc_service_publish_impl`
 - `worker_oc_service_multi_publish_impl`
 - `ClientWorkerRemoteApi::Publish/MultiPublish`
@@ -161,8 +161,8 @@ L3 优先模块：
 
 ## 7.4 定界结论规则
 - 仅 UB 不稳但写最终成功：性能退化，记录为降级事件。
-- UB 与 TCP 都失败且无入口日志：L1（网络/OS）优先。
-- 入口正常但 Worker 内部 moving/master 链失败：L3/L2（数据系统+控制面）优先。
+- UB 与 TCP 都失败且无入口日志：L1（平台与网络）优先。
+- 入口正常但 Worker 内部 moving/master 链失败：L3（数据系统）/L2（三方件）优先。
 
 ---
 
@@ -173,7 +173,7 @@ L3 优先模块：
 - Worker：可能无对应入口日志，或入口后 master RPC 失败并回传
 
 ## 8.2 Worker 日志判据（强相关）
-- 有 `Authenticate failed.`：认证链问题（L0+L3）
+- 有 `Authenticate failed.`：认证链问题（L0（集成方）+L3（数据系统））
 - 有 `Fail to create all the objects on master`：控制面/元数据阶段失败
 - 有 `ValidateWorkerState ... failed`：worker 状态不满足（非纯网络）
 - 无写入口日志：请求未到达，优先链路/连接
@@ -188,8 +188,8 @@ L3 优先模块：
 5. 结合写路径分段时延，判断慢在入口 RPC 还是控制面元数据提交。
 
 ## 8.4 定界结论规则
-- SDK 1002 + Worker无入口：L1 优先。
-- SDK 1002 + Worker有入口且内部 master/moving 异常：L3/L2 优先。
+- SDK 1002 + Worker无入口：L1（平台与网络）优先。
+- SDK 1002 + Worker有入口且内部 master/moving 异常：L3（数据系统）/L2（三方件）优先。
 
 ---
 
@@ -209,5 +209,32 @@ L3 优先模块：
 ## 9.3 建议输出的自证信息
 - keys 数量、失败 keys、重试次数、是否 `meta_is_moving`
 - 入口 Worker 与 master 地址、超时与错误码
-- L2 落盘是否失败、是否降级运行
+- L2（本地二级存储）落盘是否失败、是否降级运行
+
+---
+
+## 10. 写接口定界表格（错误码 + 定界话术）
+
+| 场景信号 | 首选证据（SDK + Worker） | 初判责任域 | 数据系统内优先模块 |
+|------|------------------|------------|---------------------|
+| SDK `K_INVALID` | keys/vals 输入、重复 key、Tx 约束 | L0（集成方） | `ObjectClientImpl::MSet` 参数校验 |
+| SDK `K_SCALING` | Worker `The cluster is scaling, please try again.` | L3（数据系统）/L2（三方件）（迁移控制面） | `worker_oc_service_multi_publish_impl` |
+| SDK `K_RPC_UNAVAILABLE(1002)` 且 Worker 无写入口 | SDK 错误 + Worker 无 Publish/MultiPublish 日志 | L1（平台与网络） | `ClientWorkerRemoteApi::Publish/MultiPublish` |
+| SDK `K_RPC_UNAVAILABLE(1002)` 且 Worker 有入口 | Worker `Fail to create all the objects on master` / 状态失败 | L3（数据系统）/L2（三方件）（写处理链+控制面） | `worker_oc_service_multi_publish_impl` |
+| 写成功但出现 UB 降级或重试放大 | SDK 重试日志 + 分段时延上升 | 性能退化，非功能故障 | SDK 重试策略 + Worker 写路径 |
+| `K_IO_ERROR` / `K_NO_SPACE` + L2 落盘失败日志 | `Multiple set fails to save object ... to l2cache.` | L1（平台与网络）（存储资源）+ L3（数据系统）（落盘链） | `publish_impl` / `eviction` |
+
+## 10.1 写接口定界话术模板（可直接复用）
+
+- **网络/连接侧（L1（平台与网络））**  
+  “本次写请求 SDK 返回 `K_RPC_UNAVAILABLE(1002)`，同时间窗入口 Worker 无 Publish/MultiPublish 入口日志，优先定界为网络/连接前置问题，数据系统侧提供请求时间窗与空入口证据。”
+
+- **迁移窗口（L3（数据系统）/L2（三方件））**  
+  “写请求返回 `K_SCALING`，Worker 侧有 `The cluster is scaling, please try again.` 明确日志，属于扩缩容迁移窗口语义，不按普通链路故障定性。”
+
+- **数据系统写链问题（L3（数据系统））**  
+  “请求已进入 Worker，且出现 `Fail to create all the objects on master` / `Publish failed`，故优先定界在数据系统写处理链，再细分到 master 交互或对象状态机阶段。”
+
+- **存储可靠性降级（L1（平台与网络）+L3（数据系统））**  
+  “写路径出现 `K_IO_ERROR/K_NO_SPACE` 并伴随 `...save object ... to l2cache` 失败日志，功能可能降级但业务不中断，需按存储资源与落盘链联合处理。”
 
