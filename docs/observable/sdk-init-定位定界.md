@@ -165,11 +165,263 @@ Worker 侧失败常带 `LOG(ERROR) "<步骤>. Detail: ..."`，客户端对应 `R
 | 首心跳 | `src/datasystem/client/listen_worker.cpp`（`StartListenWorker`） |
 | 错误码枚举 | `include/datasystem/utils/status.h` |
 | 错误日志宏 | `src/datasystem/common/util/status_helper.h`（`RETURN_IF_NOT_OK_PRINT_ERROR_MSG`） |
+| FD 传递 / mmap 表 | `src/datasystem/client/mmap_manager.cpp`、`src/datasystem/client/mmap/shm_mmap_table_entry.cpp`、`src/datasystem/common/util/fd_pass.cpp` |
+| Socket errno → Status | `src/datasystem/common/rpc/unix_sock_fd.cpp`（`ErrnoToStatus`） |
+| ZMQ 层 UNAVAILABLE | `src/datasystem/common/rpc/zmq/zmq_socket_ref.cpp`、`zmq_stub_conn.cpp` |
+| URMA 管理器 | `src/datasystem/common/rdma/urma_manager.cpp` |
+| Worker `GetClientFd` | `src/datasystem/worker/worker_service_impl.cpp` |
+| Arena 物理分配 | `src/datasystem/common/shared_memory/arena.cpp`、`arena_group_key.h` |
 
 ---
 
-## 8. 修订记录
+## 8. FD 交换与 `mmap`：错误码、消息与调用栈（代码证据）
+
+**说明**：Init 完成后，业务路径在需要把 **Worker 侧 shm fd** 映射到客户端地址空间时，走 **`MmapManager::LookupUnitsAndMmapFds`**；其中远程场景会 **RPC `GetClientFd` + UDS/SCMTCP 收 fd + `mmap`**。下列栈以 **`ObjectClientImpl::MmapShmUnit`** 为典型入口（Create/Get 等路径也会调用 `LookupUnitsAndMmapFd`）。
+
+### 8.1 调用栈（自顶向下）
+
+1. **`ObjectClientImpl::MmapShmUnit`**（或 `Create` / `MGet` 等内联路径）  
+   - 文件：`src/datasystem/client/object_cache/object_client_impl.cpp`  
+   - 行为：组 `ShmUnitInfo`，调用 `mmapManager_->LookupUnitsAndMmapFd`；失败时可能 **`K_RUNTIME_ERROR` + `"Get mmap entry failed"`**。
+
+```1813:1826:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/client/object_cache/object_client_impl.cpp
+Status ObjectClientImpl::MmapShmUnit(int64_t fd, uint64_t mmapSize, ptrdiff_t offset,
+                                     std::shared_ptr<client::IMmapTableEntry> &mmapEntry, uint8_t *&pointer)
+{
+    auto shmBuf = std::make_shared<ShmUnitInfo>();
+    shmBuf->fd = fd;
+    shmBuf->mmapSize = mmapSize;
+    shmBuf->offset = offset;
+    PerfPoint mmapPoint(PerfKey::CLIENT_LOOK_UP_MMAP_FD);
+    RETURN_IF_NOT_OK(mmapManager_->LookupUnitsAndMmapFd("", shmBuf));
+    mmapEntry = mmapManager_->GetMmapEntryByFd(shmBuf->fd);
+    CHECK_FAIL_RETURN_STATUS(mmapEntry != nullptr, StatusCode::K_RUNTIME_ERROR, "Get mmap entry failed");
+    mmapPoint.Record();
+    pointer = static_cast<uint8_t *>(shmBuf->pointer) + shmBuf->offset;
+    return Status::OK();
+}
+```
+
+2. **`MmapManager::LookupUnitsAndMmapFd` → `LookupUnitsAndMmapFds`**  
+   - 文件：`src/datasystem/client/mmap_manager.cpp`  
+   - 对已登记 fd 只做表查询；对未 mmap 的 worker fd：**非嵌入式** 调 **`clientWorker_->GetClientFd`**，再 **`mmapTable_->MmapAndStoreFd`**。
+
+```82:90:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/client/mmap_manager.cpp
+    if (!toRecvFds.empty()) {
+        // Notify worker to send fds and receive the client fd.
+        if (!enableEmbeddedClient_) {
+            RETURN_IF_NOT_OK(clientWorker_->GetClientFd(toRecvFds, clientFds, tenantId));
+            // Mmap the new client fd.
+            for (size_t i = 0; i < clientFds.size(); i++) {
+                RETURN_IF_NOT_OK(mmapTable_->MmapAndStoreFd(clientFds[i], toRecvFds[i], mmapSizes[i], tenantId));
+            }
+```
+
+3. **`ClientWorkerRemoteCommonApi::GetClientFd`**  
+   - 文件：`src/datasystem/client/client_worker_common_api.cpp`  
+   - RPC **`GetClientFd`**（不自动重试）+ 后台线程经 **`SockRecvFd`** 收 fd；失败时 **`CHECK_FAIL_RETURN_STATUS_PRINT_ERROR`**。
+
+| 错误码 | 典型 `Status` 消息 / 日志 | 说明 |
+|--------|---------------------------|------|
+| `K_RUNTIME_ERROR` (5) | `Current client can not support uds, so query client fd failed.` | 未启用 SHM 或 `socketFd_ == INVALID_SOCKET_FD` |
+| `K_RUNTIME_ERROR` (5) | `Receive fd[...] from <socket> failed, detail: <status.ToString()>` | RPC 失败 **或** 超时内未收到 fd（`clientFds` 仍为空） |
+| 随 RPC 层 | `Detail` 内可为 `K_RPC_UNAVAILABLE` / `K_RPC_DEADLINE_EXCEEDED` / `K_NOT_AUTHORIZED` 等 | 同 `GetClientFd` 的 Worker 返回或 ZMQ/网络 |
+
+```670:714:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/client/client_worker_common_api.cpp
+Status ClientWorkerRemoteCommonApi::GetClientFd(const std::vector<int> &workerFds, std::vector<int> &clientFds,
+                                                const std::string &tenantId)
+{
+    if (!IsShmEnable() || socketFd_ == INVALID_SOCKET_FD) {
+        return { K_RUNTIME_ERROR, "Current client can not support uds, so query client fd failed." };
+    }
+    ...
+    Status status = commonWorkerSession_->GetClientFd(opts, req, rsp);
+    if (status.IsOk()) {
+        RecvFdAfterNotify(workerFds, requestId, time, clientFds);
+    }
+    CHECK_FAIL_RETURN_STATUS_PRINT_ERROR(!clientFds.empty(), K_RUNTIME_ERROR,
+                                         FormatString("Receive fd[%s] from %d failed, detail: %s",
+                                                      VectorToString(workerFds), socketFd_, status.ToString()));
+```
+
+4. **`ShmMmapTableEntry::Init`（实际 `mmap`）**  
+   - 文件：`src/datasystem/client/mmap/shm_mmap_table_entry.cpp`  
+
+| 错误码 | 消息 | 说明 |
+|--------|------|------|
+| `K_INVALID` (2) | `The mmap size [<size>] is invalid for fd [<fd>]` | `size_ <= 0` |
+| `K_RUNTIME_ERROR` (5) | `Mmap [fd = <fd>] failed. Error no: [<errno str>]` | `mmap()` 返回 `MAP_FAILED`（内核/资源/权限） |
+
+```33:52:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/client/mmap/shm_mmap_table_entry.cpp
+Status ShmMmapTableEntry::Init(bool enableHugeTlb, const std::string &tenantId)
+{
+    ...
+    if (size_ <= 0) {
+        err << "The mmap size [" << size_ << "] is invalid for fd [" << fd_ << "]";
+        ...
+        RETURN_STATUS(StatusCode::K_INVALID, err.str());
+    }
+    ...
+    pointer_ = reinterpret_cast<uint8_t *>(mmap(nullptr, size_, PROT_READ | PROT_WRITE, mFlag, fd_, 0));
+    if (pointer_ == MAP_FAILED) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_RUNTIME_ERROR,
+                                FormatString("Mmap [fd = %d] failed. Error no: [%s]", fd_, StrErr(errno)));
+    }
+```
+
+5. **`MmapManager` 查表**  
+   - 可能 **`K_RUNTIME_ERROR`**：`The pointer which is looked up from mmap table is nullptr!`（`mmap_manager.cpp`）。
+
+### 8.2 Worker 侧 `GetClientFd`（与客户端 RPC 成对）
+
+| 错误码 | Worker 日志前缀（`RETURN_IF_NOT_OK_PRINT_ERROR_MSG`） | 含义 |
+|--------|------------------------------------------------------|------|
+| 随认证 | `Authenticate failed. Detail:` | 同 Register |
+| `K_RUNTIME_ERROR` 等 | `worker get client socketfd failed` | `ClientManager::GetClientSocketFd` 失败 |
+| `K_RUNTIME_ERROR` 等 | `Authenticate workerFd failed.` | `Allocator::CheckWorkerFdTenant` |
+| `K_UNKNOWN_ERROR` 等 | `worker socketfd send failed` | `SockSendFd` 失败 |
+
+```152:177:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/worker/worker_service_impl.cpp
+Status WorkerServiceImpl::GetClientFd(const GetClientFdReqPb &req, GetClientFdRspPb &rsp)
+{
+    ...
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(AuthenticateRequest(akSkManager_, req, authTenantId, tenantId),
+                                     "Authenticate failed");
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(ClientManager::Instance().GetClientSocketFd(clientId, socketFd),
+                                     "worker get client socketfd failed");
+    ...
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(memory::Allocator::Instance()->CheckWorkerFdTenant(tenantId, workerFds),
+                                     "Authenticate workerFd failed.");
+    ...
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(SockSendFd(socketFd, shmWorkerPort_ > 0, workerFds, req.request_id()),
+                                     "worker socketfd send failed");
+```
+
+### 8.3 本地 FD 传递（`SockRecvFd` / `SockSendFd`）常见消息
+
+| 错误码 | 消息 | 典型场景 |
+|--------|------|----------|
+| `K_UNKNOWN_ERROR` (10) | `Unexpected EOF read.` | 对端关闭，`recvmsg` 返回 0 |
+| `K_UNKNOWN_ERROR` (10) | `Pass fd meets unexpected error: <errno>` | 非 EAGAIN/EINTR 的 `recvmsg/sendmsg` 失败 |
+| `K_UNKNOWN_ERROR` (10) | `We receive the invalid fd` | SCM_RIGHTS 中带非法 fd |
+| `K_RUNTIME_ERROR` (5) | `memset_s failed...` / `Copy cmsg failed...` | 本地组装消息失败 |
+
+（实现：`src/datasystem/common/util/fd_pass.cpp`。）
+
+### 8.4 Init 阶段的 FD 交换（补充）
+
+Register 之前的 **SHM 握手**在 **`ClientWorkerRemoteCommonApi::CreateHandShakeFunc`**：`fd.Connect`、`Recv32`、`SockRecvFd`（SCMTCP 同机校验）等；失败信息多为 **连接/接收** 相关 Status（见 4.2 节 WARNING 日志），成功日志示例：`Connects to local server ... Client fd ... Server fd ...`（`client_worker_common_api.cpp`）。
+
+---
+
+## 9. URMA Manager 与物理内存分配：错误码与消息
+
+### 9.1 客户端 `UrmaManager`（`clientMode_ == true` 时的缓冲池）
+
+**文件**：`src/datasystem/common/rdma/urma_manager.cpp`。
+
+| 阶段 | 错误码 | 典型消息 | 说明 |
+|------|--------|----------|------|
+| `Init` 并发 | `K_URMA_ERROR` (1004) | `UrmaManager initialization failed` | 他线程初始化失败，本线程 `waitInit_` 结束仍非 `INITIALIZED` |
+| `InitMemoryBufferPool` | `K_RUNTIME_ERROR` (5) | `Env <name> value ... parse to number failed: ...` | 环境变量解析失败（`ParseEnvUint64`） |
+| `InitMemoryBufferPool` | `K_INVALID` (2) | `ubTransportMemSize <n> is invalid, must be between ...` | 传输内存大小非法 |
+| `hostAllocFunc`（`mmap` 匿名内存池） | `K_OUT_OF_MEMORY` (6) | `Failed to allocate memory buffer pool for client` | `mmap(MAP_ANONYMOUS)` 得到 `MAP_FAILED` |
+| `CreateArenaGroup` | 透传 Allocator | `Failed to get arena group for client. Detail: ...` | `RETURN_IF_NOT_OK_PRINT_ERROR_MSG` |
+| 注册失败分支 | 可能降级为 WARNING | `Failed to register memory buffer pool for client, error: ...` | `InitWithFlexibleRegister` 失败；`K_DUPLICATED` 会被视为 OK |
+
+```232:272:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/common/rdma/urma_manager.cpp
+    if (ubTransportMemSize_.load() > MAX_TRANSPORT_MEM_SIZE || ubTransportMemSize_.load() <= 0) {
+        RETURN_STATUS_LOG_ERROR(StatusCode::K_INVALID,
+                                FormatString("ubTransportMemSize %lu is invalid, must be between %lu and %lu",
+                                             ubTransportMemSize_.load(), 0, MAX_TRANSPORT_MEM_SIZE));
+    }
+    ...
+        if (memoryBuffer_ == MAP_FAILED) {
+            RETURN_STATUS(K_OUT_OF_MEMORY, "Failed to allocate memory buffer pool for client");
+        }
+    ...
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(rc, "Failed to get arena group for client");
+    ...
+        LOG(WARNING) << "Failed to register memory buffer pool for client, error: " << rc.ToString();
+```
+
+**`GetMemoryBufferHandle`**：`K_INVALID` + `UB Get buffer size is 0`；否则经 **`ShmUnit::AllocateMemory`** 走全局 **`Allocator`**，可能返回 **`K_OUT_OF_MEMORY`** 等（与 Worker 共用分配器逻辑）。
+
+### 9.2 Worker 侧物理内存（Arena / UB_TRANSPORT）
+
+Worker 与 Client 共用 **`memory::Allocator` / `ArenaGroup::AllocateMemoryImpl`**（`src/datasystem/common/shared_memory/arena.cpp`）。当 **jemalloc 分配返回 `K_OUT_OF_MEMORY`** 时，会包装为：
+
+| 错误码 | 消息模式 | 备注 |
+|--------|----------|------|
+| `K_OUT_OF_MEMORY` (6) | `FormatString("%s no space in arena: %d", errHint, arenaId)` | `errHint` 来自 `CACHE_TYPE_STR`；**当前 `arena_group_key.h` 未包含 `UB_TRANSPORT`**，该类型可能显示为 **`UnknowType`** |
+
+```150:159:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/common/shared_memory/arena.cpp
+    auto status = Jemalloc::Allocate(arenaId, size, pointer);
+    if (status.GetCode() == StatusCode::K_OUT_OF_MEMORY) {
+        auto it = CACHE_TYPE_STR.find(cacheType_);
+        std::string errHint = "UnknowType";
+        if (it != CACHE_TYPE_STR.end()) {
+            errHint = it->second;
+        }
+        std::string errorMsg = FormatString("%s no space in arena: %d", errHint, arenaId);
+        status = Status(StatusCode::K_OUT_OF_MEMORY, errorMsg);
+    }
+```
+
+**定界**：`K_OUT_OF_MEMORY` + `no space in arena` → **Worker/客户端进程地址空间或预分配物理池耗尽**（资源类）；若伴随系统 OOM → **OS**。
+
+---
+
+## 10. `K_RPC_UNAVAILABLE`（1002）：Worker 问题还是 Socket？能否用心跳定界？
+
+### 10.1 错误码在框架中的典型来源（消息形态）
+
+`K_RPC_UNAVAILABLE` 是 **传输/框架层** 对「当前无法完成 RPC」的统称，**不等价于**「一定是 Worker 业务 bug」。常见代码证据：
+
+| 来源 | 文件 / 符号 | 典型消息 |
+|------|-------------|----------|
+| Socket `errno` | `UnixSockFd::ErrnoToStatus` | `Connect reset. fd <fd>. err <str>`（`ECONNRESET` / `EPIPE` → **1002**） |
+| Socket 其他错误 | 同上 | `Socket receive error. err <str>` → 多为 **`K_RUNTIME_ERROR`**（非 1002） |
+| ZMQ | `zmq_socket_ref.cpp` | `ZMQ recv msg unsuccessful` / connect 失败等 → **1002** |
+| Stub 连接 | `zmq_stub_conn.cpp` | `The service is currently unavailable! ...`、`Network unreachable`、`Timeout waiting for SockConnEntry wait`、`Remote service is not available within allowable <n> ms` 等 → **1002** |
+
+```55:63:/home/t14s/workspace/git-repos/yuanrong-datasystem/src/datasystem/common/rpc/unix_sock_fd.cpp
+Status UnixSockFd::ErrnoToStatus(int err, int fd)
+{
+    if (err == EAGAIN || err == EWOULDBLOCK || err == EINTR || err == EINPROGRESS) {
+        RETURN_STATUS(K_TRY_AGAIN, FormatString("Socket receive error. err %s", StrErr(err)));
+    }
+    if (err == ECONNRESET || err == EPIPE) {
+        RETURN_STATUS(StatusCode::K_RPC_UNAVAILABLE, FormatString("Connect reset. fd %d. err %s", fd, StrErr(err)));
+    }
+    RETURN_STATUS(K_RUNTIME_ERROR, FormatString("Socket receive error. err %s", StrErr(err)));
+}
+```
+
+### 10.2 定界思路（Socket / 网络 vs Worker 进程与逻辑）
+
+| 现象 | 更倾向 | 依据 |
+|------|--------|------|
+| `Detail` 含 **`Connect reset` / `EPIPE` / `ECONNRESET`** | **链路或对端关闭** | 对端崩溃、重启、防火墙 RST、代理断开 |
+| `Network unreachable`、连接超时、`allowable <n> ms` | **网络或 Worker 未监听** | 路由/端口/进程未起 |
+| Worker 日志 **同一时间无请求入口**，客户端仅 1002 | **包未到达或前置连接失败** | 对齐时间线、抓包、查监听 |
+| Worker 日志有 **Authenticate / 业务返回错误** | **数据系统逻辑** | 错误码通常 **非** 单纯 1002，或 1002 来自 ZMQ「服务不可用」包装 |
+
+### 10.3 能否通过「心跳」定界？
+
+- **可以，但要看心跳与失败 RPC 是否同通道、同生命周期。**  
+  - **`Heartbeat`** 与 **`GetSocketPath` / `RegisterClient`** 一样走 **`WorkerService_Stub`（ZMQ）**。若 **Heartbeat 成功** 而 **偶发业务 RPC 1002**，更倾向 **瞬时网络、连接池、或独占通道差异**，需对比 **是否同一 `RpcChannel`/endpoint**。  
+  - 若 **Heartbeat 也失败** 且 `Status` 为 **`K_RPC_UNAVAILABLE` / `K_RPC_DEADLINE_EXCEEDED`**，则 **整体链路或 Worker 不可用** 概率高。  
+- **首心跳**（Init 阶段）：`ListenWorker::StartListenWorker` 在 **`connectTimeoutMs_`** 内必须收到 **第一次成功的 `SendHeartbeat`**，否则 **`K_CLIENT_WORKER_DISCONNECT` (23)** + **`Cannot receive heartbeat from worker.`** — 这表示 **「注册后 RPC 心跳路径不通」**，可能是 **网络、Worker 阻塞、超时过短**，不能单独区分「socket」与「Worker 逻辑」需结合 Worker 日志。  
+- **持续心跳失败**：`ListenWorker::CheckHeartbeat` 中 `SendHeartbeat` 返回 error 会累计；超时后 **`LOG(WARNING) Lost heartbeat, set worker available to false ... Detail:<status.ToString()>`**（`listen_worker.cpp`），此时 `Detail` 中的 **1002/1001** 同样反映 **RPC 传输层**，与上表一致。
+
+**结论**：**心跳是有效的「同通道可达性」探针**，但 **1002 本身不区分**「Socket 断了」与「Worker 进程拒绝服务」；定界需 **消息字符串 + Worker 侧同一时刻日志 + 端口/进程存活**。
+
+---
+
+## 11. 修订记录
 
 | 日期 | 说明 |
 |------|------|
 | 2026-04-08 | 初版：基于 `ObjectClientImpl::Init` / `WorkerServiceImpl::RegisterClient` 代码路径整理 |
+| 2026-04-08 | 增补：FD 交换与 mmap 调用栈与错误表；UrmaManager / Arena 物理内存；`K_RPC_UNAVAILABLE` 与心跳定界 |
