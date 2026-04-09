@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate KV Client observability workbook for fault triage."""
 
+import re
 from pathlib import Path
 
 from openpyxl import Workbook
@@ -8,6 +9,7 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 OUT = Path(__file__).resolve().parent.parent / "kv-client-观测-调用链与URMA-TCP.xlsx"
+SOURCE_ROOT = Path("/home/t14s/workspace/git-repos/yuanrong-datasystem")
 
 # 责任归属取值约定：用户参数 | OS | URMA | 数据系统逻辑 | RPC框架
 CHAIN_HEADERS = [
@@ -539,6 +541,29 @@ def derive_internal_error_enum_info(row):
     return "\n".join(lines)
 
 
+def normalize_status_with_enum(status_text):
+    """Prefer enum(value) over plain numeric values in status text."""
+    s = str(status_text)
+    replacements = [
+        ("1006", "K_URMA_NEED_CONNECT(1006)"),
+        ("1004", "K_URMA_ERROR(1004)"),
+        ("1002", "K_RPC_UNAVAILABLE(1002)"),
+        ("1001", "K_RPC_DEADLINE_EXCEEDED(1001)"),
+        ("32", "K_SCALING(32)"),
+        ("19", "K_TRY_AGAIN(19)"),
+        ("6", "K_OUT_OF_MEMORY(6)"),
+        ("5", "K_RUNTIME_ERROR(5)"),
+    ]
+    for raw, enumv in replacements:
+        s = s.replace(f"; {raw}", f"; {enumv}")
+        s = s.replace(f"/{raw}", f"/{enumv}")
+        s = s.replace(f" {raw};", f" {enumv};")
+        s = s.replace(f" {raw},", f" {enumv},")
+        if s.strip() == raw:
+            s = enumv
+    return s
+
+
 def derive_root_cause_detail(row):
     """Detailed root-cause explanation column."""
     if len(row) < 7:
@@ -584,28 +609,30 @@ def derive_root_cause_detail(row):
 
 
 def simplify_owner(owner, info, step):
-    """Simplify owner categories: 用户参数/数据系统/RPC框架/OS/UMDK或URMA."""
+    """Simplify owner categories per user rule: 用户参数/数据系统/OS/URMA."""
     o = str(owner)
     t = f"{owner} {info} {step}".lower()
     if "用户参数" in o:
         return "用户参数"
     if "urma" in t or "jfc" in t or "jfr" in t or "jfs" in t or "umdk" in t:
-        return "UMDK/URMA"
+        return "URMA"
+    # ZMQ-RPC framework internal logic (not direct socket/errno failure) -> 数据系统
+    if "zmq" in t and not any(k in t for k in ["socket", "send", "recv", "connect", "poll", "errno", "eagain", "etimedout"]):
+        return "数据系统"
+    # RPC transport/socket/errno issues -> OS
+    if "rpc" in t and any(k in t for k in ["socket", "send", "recv", "connect", "poll", "zmq", "errno", "timeout", "unavailable", "try_again"]):
+        return "OS"
     if any(k in t for k in ["socket", "zmq", "send", "recv", "connect", "poll", "mmap", "fd", "errno", "close"]):
         return "OS"
-    if "rpc" in t:
-        return "RPC框架"
     return "数据系统"
 
 
 def build_chain_rows_with_system_info(rows):
     out = []
-    iface_step_counter = {}
     for row in rows:
         # raw row layout:
         # 0接口 1调用链 2步骤 3发生位置 4责任 5接口信息 6典型status日志 7返回 8重试 9建议 10锚点
         iface, chain, step, location, owner, info, status_log, ret, retry, advice, anchor = row
-        iface_step_counter[iface] = iface_step_counter.get(iface, 0) + 1
         chain = enrich_chain(chain, location, owner)
         loc_main, loc_detail = split_location_detail(location)
         comp_desc = "client1本地访问"
@@ -625,7 +652,7 @@ def build_chain_rows_with_system_info(rows):
         )
         urma_info, os_info = split_interface_info(info)
         internal_info = derive_internal_error_enum_info(list(row))
-        combined_status = f"{status_log}\n{internal_info}"
+        combined_status = internal_info
         urma_err = derive_urma_error_info(list(row))
         os_err = derive_os_error_info(list(row))
         # Consistency guard:
@@ -643,7 +670,8 @@ def build_chain_rows_with_system_info(rows):
         else:
             return_retry = f"返回: {ret}；重试: {retry}。"
         reason_and_advice = f"{root_cause}\n- 定位建议: {advice}"
-        remark = f"{return_retry}\n- 代码锚点: {anchor}"
+        evidence = _find_code_evidence(anchor, status_log)
+        remark = f"{return_retry}\n- 代码锚点: {anchor}\n- {evidence}"
         out.append(
             (
                 iface,
@@ -674,6 +702,62 @@ def fill_sheet(ws, headers, rows, tree_col=None):
     if tree_col is not None:
         # keep tree column readable without over-expanding others
         ws.column_dimensions[get_column_letter(tree_col)].width = 64
+
+
+def _anchor_file_candidates(anchor):
+    files = []
+    for token in str(anchor).split(";"):
+        token = token.strip()
+        m = re.search(r"([A-Za-z0-9_./-]+\.(?:cpp|cc|c|h|hpp))", token)
+        if m:
+            files.append(Path(m.group(1)).name)
+    return files
+
+
+def _status_keywords(status_log):
+    parts = []
+    for p in str(status_log).split(";"):
+        p = p.strip()
+        if not p:
+            continue
+        if re.fullmatch(r"[A-Za-z_()]+", p):
+            continue
+        if re.fullmatch(r"[0-9/ ]+", p):
+            continue
+        if len(p) >= 6:
+            parts.append(p)
+    if not parts and status_log:
+        parts.append(str(status_log))
+    return parts[:2]
+
+
+def _find_code_evidence(anchor, status_log):
+    """Find an in-code snippet by anchor files + log keyword."""
+    if not SOURCE_ROOT.exists():
+        return "代码证据: 源码目录不存在"
+    file_names = _anchor_file_candidates(anchor)
+    if not file_names:
+        return f"代码证据: 锚点 {anchor}"
+    keywords = _status_keywords(status_log)
+    for name in file_names:
+        for path in SOURCE_ROOT.rglob(name):
+            try:
+                lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            except Exception:
+                continue
+            for kw in keywords:
+                kw_lower = kw.lower()
+                for i, ln in enumerate(lines):
+                    if kw_lower in ln.lower():
+                        start = max(0, i - 1)
+                        end = min(len(lines), i + 2)
+                        snippet = " | ".join(f"{idx+1}:{lines[idx].strip()}" for idx in range(start, end))
+                        return f"代码证据: {path.name}:{i+1} {snippet}"
+            # fallback: use first line containing a common log/error call
+            for i, ln in enumerate(lines):
+                if any(tok in ln for tok in ["LOG_", "RETURN_STATUS", "CHECK_FAIL_RETURN_STATUS", "FormatString("]):
+                    return f"代码证据: {path.name}:{i+1} {i+1}:{ln.strip()}"
+    return f"代码证据: 未命中关键词，锚点 {anchor}"
 
 
 def main():
