@@ -1,0 +1,87 @@
+@startuml kv_client_triage_write_step
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+skinparam sequenceMessageAlign center
+
+title KV Client 定位定界（步骤3: 写路径 Put/MSet）
+
+actor "测试/开发/Agent" as T
+participant "client1\nSDK" as C
+participant "worker1\n入口Worker" as W1
+participant "worker3\n数据副本" as W3
+participant "URMA" as U
+participant "OS/syscall" as OS
+
+T -> C : 发起 Put/MSet
+activate C
+
+C -> C : 参数与分支判断
+alt 参数非法
+  note right of C
+    责任团队: 接口调用方/业务方
+    现象: K_INVALID
+    建议: 核对对象大小/批次数/选项
+  end note
+  C --> T : 失败(K_INVALID)
+  deactivate C
+  return
+end
+
+opt UB单对象发送路径
+  C -> U : UrmaWritePayload / urma_write
+  alt UB发送失败
+    note right of U
+      责任团队: RDMA/URMA团队
+      现象: Failed to send buffer via UB
+      建议: 查UB池大小、对象长度、URMA连接
+    end note
+    C -> C : 可切非UB路径
+  end
+end
+
+C -> W1 : Publish/MultiPublish + RetryOnError
+activate W1
+alt 1001/1002/19
+  note right of W1
+    责任团队: RPC/网络中间件团队
+    建议: 先查网络和worker入口处理时延
+  end note
+  W1 --> C : RPC错误
+  deactivate W1
+  C --> T : 写失败(RPC)
+  deactivate C
+  return
+else K_SCALING(32)/OOM(6)
+  note right of W1
+    责任团队: 数据系统容量/调度团队
+    建议: 查扩缩容窗口、批次大小、内存水位
+  end note
+end
+
+W1 -> W3 : 转发写请求
+activate W3
+W3 -> U : URMA数据面写入
+alt URMA写入/完成失败
+  note right of U
+    责任团队: RDMA/URMA团队
+    现象: K_URMA_ERROR / K_RUNTIME_ERROR / 1006
+  end note
+end
+W3 --> W1 : 写入结果
+deactivate W3
+
+W1 --> C : 写入返回
+deactivate W1
+
+opt 资源回收/清理
+  C -> OS : close / munmap
+  note right of OS
+    责任团队: OS团队(仅清理异常时)
+  end note
+end
+
+C --> T : 写完成
+deactivate C
+
+@enduml

@@ -7,6 +7,7 @@
 - SDK Init 详版：[sdk-init-定位定界.md](./sdk-init-定位定界.md)
 - Worker 启动故障详版：[worker-启动故障-定位定界.md](./worker-启动故障-定位定界.md)
 - 序列图目录：[docs/flows/sequences/kv-client/README.md](../flows/sequences/kv-client/README.md)
+- KV Client 调用链 × URMA/TCP（Excel + Markdown 证据包）：[kv-client-excel/README.md](./kv-client-excel/README.md)
 
 **深度展开**（本文 **§9～§12**）：TCP(ZMQ) 与 UB(URMA) 的 **错误码 → 日志 → 源码位置**，以及 **总体 + 分场景排查树**（Mermaid）；无法渲染 Mermaid 时可直接读图中节点文字作检查清单。
 

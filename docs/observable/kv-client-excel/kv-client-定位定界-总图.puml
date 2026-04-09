@@ -1,0 +1,73 @@
+@startuml kv_client_observability_triage_flow
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+skinparam dpi 150
+
+title KV Client 定位定界总图（测试/开发/Agent共用）
+
+start
+:输入工单信息\n- 接口: Init/Get/MGet/MSet\n- SDK Status/last_rc\n- 关键日志关键词;
+
+if (参数合法?) then (否)
+  :责任归属 = 用户参数;
+  :建议\n核对 key/offset/batch/timeout;\n比对接口约束;
+  :查 Sheet5 D01;
+  stop
+else (是)
+endif
+
+if (命中 URMA 关键词?) then (是)
+  :关键词示例\nFailed to urma...\npoll/wait/rearm jfc\nneed to reconnect\nfallback to TCP/IP payload;
+  if (status=1006?) then (是)
+    :责任归属 = URMA(连通性状态机);
+    :建议\n重建 UB 会话并复验;
+    :查 Sheet5 D08 + Sheet3 CheckUrmaConnectionStable;
+  else (否)
+    :责任归属 = URMA;
+    :建议\n按具体 urma_* 接口排查设备/驱动/UMDK/CQ;
+    :查 Sheet5 D05/D06/D07 + Sheet3;
+  endif
+  stop
+else (否)
+endif
+
+if (命中 OS/syscall 关键词?) then (是)
+  :关键词示例\nrecvmsg/sendmsg/mmap/invalid fd/EOF;
+  :责任归属 = OS;
+  :建议\n先判 UDS 传fd 还是 SHM mmap 失败;\n再查 fd 上限/同机映射/内存限制;
+  :查 Sheet5 D03/D04 + Sheet2;
+  stop
+else (否)
+endif
+
+if (status in [1001,1002,19] 或 RPC 重试日志?) then (是)
+  :责任归属 = RPC框架(优先) 或 数据系统逻辑;
+  :建议\n无 worker 入口日志 -> 网络/RPC;\n有入口日志 -> worker慢或下游;
+  :查 Sheet5 D02/D14 + Sheet1 RPC行;
+  stop
+else (否)
+endif
+
+if (命中业务逻辑关键词?) then (是)
+  :关键词示例\netcd unavailable\nQuery from master failed\nGet from remote failed\nK_NOT_FOUND\nUB payload overflow;
+  :责任归属 = 数据系统逻辑;
+  :建议\n按位置拆段: worker1本地/worker2元数据/worker3数据面;
+  :查 Sheet5 D09~D13 + Sheet1;
+  stop
+else (否)
+endif
+
+:默认路径\n先按发生位置拆段(client1 / w1 / w2 / w3),\n补采两端同 key trace 再归类;
+:查 Sheet1 + Sheet4(若性能退化);
+stop
+
+note right
+  使用顺序建议:
+  1) 先筛 Sheet5(一行一case)
+  2) 下钻 Sheet1(步骤/case + 责任归属 + 接口信息)
+  3) 专项查 Sheet2(OS) / Sheet3(URMA)
+  4) 尾延迟问题看 Sheet4
+end note
+
+@enduml

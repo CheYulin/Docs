@@ -1,0 +1,1582 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>kv-client-URMA-OS-读写初始化-跨模块错误与重试.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="temp">temp</h1>
+<h1 id="urma--os-%E4%B8%8E-init%E8%AF%BB%E5%8F%96%E5%86%99%E5%85%A5%E8%B7%A8%E6%A8%A1%E5%9D%97%E8%B0%83%E7%94%A8%E9%94%99%E8%AF%AF%E7%82%B9%E8%BF%94%E5%9B%9E%E4%B8%8E%E9%87%8D%E8%AF%95%E5%AE%8C%E6%95%B4%E7%89%88">URMA / OS 与 Init、读取、写入：跨模块调用、错误点、返回与重试（完整版）</h1>
+<p><strong>目标</strong>：覆盖 <code>client1 / worker1 / worker2 / worker3</code> 调用链上，与 <strong>URMA 接口</strong>、<strong>OS/syscall</strong> 相关的失败点；按 <code>(a)/(b)/(c)</code> 说明错误码、日志、返回方式、是否重试。<br>
+<strong>仓库</strong>：<code>yuanrong-datasystem</code>。<br>
+<strong>说明</strong>：<code>worker2</code> 表示元数据逻辑对端（Master/etcd 链路），<code>worker3</code> 表示数据副本 Worker。</p>
+<h2 id="0-%E5%91%BD%E5%90%8D%E7%BA%A6%E5%AE%9A">0) 命名约定</h2>
+<table>
+<thead>
+<tr>
+<th>记号</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client1</code></td>
+<td>SDK 进程内</td>
+</tr>
+<tr>
+<td><code>client1-&gt;worker1</code></td>
+<td>SDK 到入口 Worker RPC</td>
+</tr>
+<tr>
+<td><code>worker1</code></td>
+<td>入口 Worker 本进程</td>
+</tr>
+<tr>
+<td><code>worker1-&gt;worker2</code></td>
+<td>入口 Worker 到元数据对端</td>
+</tr>
+<tr>
+<td><code>worker1-&gt;worker3</code></td>
+<td>入口 Worker 到数据副本 Worker</td>
+</tr>
+<tr>
+<td><code>worker3</code></td>
+<td>数据副本 Worker 本进程</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="1-sdk-init-%E9%80%BB%E8%BE%91">1) SDK Init 逻辑</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>凭证与参数校验</td>
+<td><code>client1</code></td>
+<td><code>KVClient::Init</code><br><code>|_ ObjectClientImpl::Init</code></td>
+<td>无</td>
+<td>(a) 参数非法 -&gt; <code>K_INVALID</code></td>
+<td>直接返回，无重试</td>
+</tr>
+<tr>
+<td>建连+注册</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>InitClientWorkerConnect</code><br><code>|_ Connect</code><br><code>|_ RegisterClient</code></td>
+<td>OS：socket（框架封装）</td>
+<td>(a) 建连失败 -&gt; <code>1002</code> + <code>Register client failed</code><br>(b) 超时 -&gt; <code>1001</code></td>
+<td>直接返回</td>
+</tr>
+<tr>
+<td>UDS 传 fd</td>
+<td><code>client1</code>（对端 <code>worker1</code> 发 fd）</td>
+<td><code>PostRegisterClient</code><br><code>|_ RecvPageFd</code><br><code>|_ SockRecvFd</code></td>
+<td>syscall：<code>sendmsg</code>/<code>recvmsg</code>/<code>close</code>（<code>fd_pass.cpp</code>）</td>
+<td>(a) <code>recvmsg</code> 异常 -&gt; <code>K_UNKNOWN_ERROR</code> <code>Pass fd meets unexpected error: errno</code><br>(b) 非法 fd -&gt; <code>K_UNKNOWN_ERROR</code> <code>We receive the invalid fd</code><br>(c) 空 fd -&gt; WARNING <code>may exceed the max open fd limit</code></td>
+<td>GetClientFd 主流程不重试；失败常在后续 mmap 暴露</td>
+</tr>
+<tr>
+<td>UB 快速握手</td>
+<td><code>client1</code> + <code>client1-&gt;worker1</code></td>
+<td><code>PostRegisterClient</code><br><code>|_ LOG_IF_ERROR(FastTransportHandshake)</code><br><code>|_ InitializeFastTransportManager</code><br><code>|_ ExecOnceParrallelExchange</code><br><code>|_ ExchangeJfr</code></td>
+<td>URMA：<code>UrmaManager::Init</code> 链，JFR 导入/交换；OS：<code>mmap</code> UB 池</td>
+<td>(a) <code>urma_init</code> 等失败 -&gt; <code>K_URMA_ERROR/1004</code><br>(b) UB 池 <code>mmap</code> 失败 -&gt; <code>K_OUT_OF_MEMORY/6</code><br>(c) <code>ExchangeJfr</code> 失败 -&gt; <code>K_URMA_ERROR/K_RUNTIME_ERROR</code></td>
+<td><strong>关键</strong>：<code>LOG_IF_ERROR</code> 仅日志，不阻断 Init（可回退 TCP）</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="2-%E8%AF%BB%E5%8F%96%E6%B5%81%E7%A8%8Bgetmget%E5%90%AB-ub-%E5%A4%B1%E8%B4%A5%E5%88%87-tcp">2) 读取流程（Get/MGet，含 UB 失败切 TCP）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)/(c)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前置校验与路由</td>
+<td><code>client1</code></td>
+<td><code>ObjectClientImpl::Get</code><br><code>|_ IsClientReady</code><br><code>|_ GetAvailableWorkerApi</code></td>
+<td>无</td>
+<td>(a) <code>K_INVALID</code><br>(b) <code>K_NOT_READY</code></td>
+<td>直接返回</td>
+</tr>
+<tr>
+<td><strong>UB 缓冲准备（读）</strong></td>
+<td><code>client1</code></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ PrepareUrmaBuffer</code><br><code>|_ GetMemoryBufferHandle/GetMemoryBufferInfo</code></td>
+<td>URMA：客户端 UB 缓冲池</td>
+<td><strong>(a) UB 失败 -&gt; WARNING + 回退 TCP</strong>：<code>Prepare UB Get request failed: ..., fallback to TCP/IP payload.</code><br>(b) UB 成功 -&gt; 请求带 <code>urma_info</code></td>
+<td><strong>这是 UB 失败切 TCP 的核心逻辑</strong>；不向上抛 URMA 码</td>
+</tr>
+<tr>
+<td>Get 控制面 RPC</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Get</code></td>
+<td>OS：网络栈（封装）</td>
+<td>(a) <code>1002/1001/19</code><br>(b) <code>last_rc</code> timeout/try_again 触发重试<br>(c) <code>K_OUT_OF_MEMORY</code> 且 all failed 触发重试</td>
+<td>走 <code>RetryOnError</code>（<code>RETRY_ERROR_CODE</code>）</td>
+</tr>
+<tr>
+<td>worker1 元数据与远端拉取</td>
+<td><code>worker1</code> + <code>worker1-&gt;worker2</code> + <code>worker1-&gt;worker3</code></td>
+<td><code>WorkerOcServiceGetImpl::Get</code><br><code>|_ ProcessGetObjectRequest</code><br><code>|_ QueryMeta</code><br><code>|_ GetObjectFromRemote...</code></td>
+<td>URMA：远端数据面会进入 <code>urma_write/read/poll/wait</code></td>
+<td>(a) <code>etcd is unavailable</code> -&gt; <code>1002</code><br>(b) 远端失败 -&gt; <code>Get from remote failed</code></td>
+<td>以 <code>last_rc</code>/RPC 回 client1</td>
+</tr>
+<tr>
+<td>worker3 URMA 数据面</td>
+<td><code>worker3</code></td>
+<td><code>UrmaWritePayload</code><br><code>|_ urma_write/urma_read</code><br><code>|_ urma_poll_jfc/urma_wait_jfc</code></td>
+<td>URMA：<code>urma_write</code> <code>urma_read</code> <code>urma_poll_jfc</code> <code>urma_wait_jfc</code> <code>urma_ack_jfc</code> <code>urma_rearm_jfc</code></td>
+<td>(a) write/read 失败 -&gt; <code>K_RUNTIME_ERROR</code><br>(b) poll/wait/rearm 失败 -&gt; <code>K_URMA_ERROR</code><br>(c) 连接不稳 -&gt; <code>K_URMA_NEED_CONNECT/1006</code></td>
+<td>worker1 汇总后返回</td>
+</tr>
+<tr>
+<td>client1 回包组装与 SHM/payload 解析</td>
+<td><code>client1</code></td>
+<td><code>FillUrmaBuffer</code><br><code>|_ GetBuffersFromWorker</code><br><code>|_ MmapShmUnit / SetNonShmObjectBuffer</code></td>
+<td>URMA：UB 回填；OS：mmap</td>
+<td>(a) <code>UB payload overflow</code> -&gt; <code>K_RUNTIME_ERROR</code><br>(b) <code>Get mmap entry failed</code> -&gt; <code>K_RUNTIME_ERROR</code><br>(c) payload copy/index 错 -&gt; <code>K_UNKNOWN_ERROR/K_RUNTIME_ERROR</code></td>
+<td><code>FillUrmaBuffer</code> 失败直接返回；无统一重试</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="3-%E5%86%99%E5%85%A5%E6%B5%81%E7%A8%8Bputmset">3) 写入流程（Put/MSet）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前置与分支</td>
+<td><code>client1</code></td>
+<td><code>ObjectClientImpl::Put/MSet</code><br><code>|_ ShmCreateable / IsUrmaEnabled</code></td>
+<td>无</td>
+<td>(a) 参数非法 -&gt; <code>K_INVALID</code></td>
+<td>直接返回</td>
+</tr>
+<tr>
+<td>单对象 UB 发送</td>
+<td><code>client1</code></td>
+<td><code>SendBufferViaUb</code><br><code>|_ GetMemoryBufferHandle</code><br><code>|_ memcpy</code><br><code>|_ UrmaWritePayload</code></td>
+<td>URMA：<code>UrmaWritePayload</code></td>
+<td>(a) 失败 -&gt; <code>K_INVALID</code> <code>Failed to send buffer via UB</code><br>(b) 成功 -&gt; <code>[UB Put] UrmaWritePayload done</code></td>
+<td>可退回非 UB 路径</td>
+</tr>
+<tr>
+<td>Publish / MultiPublish RPC</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>Publish/MultiPublish</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Publish/MultiPublish</code></td>
+<td>OS：网络连接（封装）</td>
+<td>(a) <code>1002/1001/19</code> 重试<br>(b) MultiPublish 额外重试 <code>K_SCALING/32</code>、<code>K_OUT_OF_MEMORY/6</code></td>
+<td>走 <code>RetryOnError</code>；Publish seal 重试遇 <code>K_OC_ALREADY_SEALED</code> 可视成功</td>
+</tr>
+<tr>
+<td>worker1-&gt;worker3 写数据面</td>
+<td><code>worker1-&gt;worker3</code> + <code>worker3</code></td>
+<td>写路径与读路径 URMA 对称</td>
+<td>URMA 同读路径</td>
+<td>(a) <code>K_URMA_ERROR/K_RUNTIME_ERROR</code><br>(b) <code>K_URMA_NEED_CONNECT</code> / RPC 错</td>
+<td>多由 worker 汇总回 client1</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="4-urma-%E6%8E%A5%E5%8F%A3%E6%B8%85%E5%8D%95%E5%B0%BD%E5%8F%AF%E8%83%BD%E5%85%A8urmamanagercpp-%E7%9B%B4%E6%8E%A5%E8%B0%83%E7%94%A8">4) URMA 接口清单（尽可能全，<code>urma_manager.cpp</code> 直接调用）</h2>
+<p><code>urma_init</code>, <code>urma_uninit</code>, <code>urma_register_log_func</code>, <code>urma_unregister_log_func</code>,<br>
+<code>urma_get_device_list</code>, <code>urma_get_device_by_name</code>, <code>urma_query_device</code>,<br>
+<code>urma_get_eid_list</code>, <code>urma_free_eid_list</code>,<br>
+<code>urma_create_context</code>, <code>urma_delete_context</code>,<br>
+<code>urma_create_jfce</code>, <code>urma_delete_jfce</code>,<br>
+<code>urma_create_jfc</code>, <code>urma_delete_jfc</code>, <code>urma_rearm_jfc</code>,<br>
+<code>urma_create_jfs</code>, <code>urma_delete_jfs</code>,<br>
+<code>urma_create_jfr</code>, <code>urma_delete_jfr</code>,<br>
+<code>urma_register_seg</code>, <code>urma_unregister_seg</code>,<br>
+<code>urma_import_seg</code>, <code>urma_unimport_seg</code>,<br>
+<code>urma_import_jfr</code>, <code>urma_unimport_jfr</code>, <code>urma_advise_jfr</code>,<br>
+<code>urma_write</code>, <code>urma_read</code>, <code>urma_post_jfs_wr</code>,<br>
+<code>urma_wait_jfc</code>, <code>urma_poll_jfc</code>, <code>urma_ack_jfc</code>.</p>
+<hr>
+<h2 id="5-ossyscall-%E6%B8%85%E5%8D%95%E8%AF%BB%E5%86%99%E5%88%9D%E5%A7%8B%E5%8C%96%E9%93%BE%E8%B7%AF">5) OS/syscall 清单（读写初始化链路）</h2>
+<table>
+<thead>
+<tr>
+<th>syscall / OS 接口</th>
+<th>主要位置</th>
+<th>关联流程</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sendmsg</code> / <code>recvmsg</code></td>
+<td><code>common/util/fd_pass.cpp</code></td>
+<td>Init UDS 传 fd、读路径 SHM 回数</td>
+</tr>
+<tr>
+<td><code>close</code></td>
+<td><code>fd_pass.cpp</code>、<code>client_worker_common_api.cpp</code></td>
+<td>过期 fd 清理</td>
+</tr>
+<tr>
+<td><code>mmap</code> / <code>munmap</code></td>
+<td><code>urma_manager.cpp</code></td>
+<td>UB 客户端缓冲池</td>
+</tr>
+<tr>
+<td>socket 建连（封装）</td>
+<td><code>client_worker_common_api.cpp</code></td>
+<td>Init、读写控制面</td>
+</tr>
+<tr>
+<td><code>usleep</code></td>
+<td><code>urma_manager.cpp::PollJfcWait</code></td>
+<td>URMA 轮询等待</td>
+</tr>
+<tr>
+<td><code>memcpy</code> / <code>MemoryCopy</code></td>
+<td><code>client_worker_base_api.cpp</code>、<code>object_client_impl.cpp</code></td>
+<td>payload/UB 组装</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="6-%E6%9C%AC%E6%AC%A1%E8%A1%A5%E9%BD%90%E7%82%B9">6) 本次补齐点</h2>
+<ol>
+<li>明确补齐读取流程 <strong>“UB 失败 -&gt; TCP 回退”</strong> 分支和日志。</li>
+<li>增加 URMA 接口覆盖清单（<code>urma_manager.cpp</code> 直接调用集合）。</li>
+<li>增加 OS/syscall 清单并标注到链路。</li>
+<li>每个大步骤补 <code>(a)/(b)/(c)</code> 的错误码、日志、返回与重试语义。</li>
+</ol>
+<h1 id="urma--os-%E4%B8%8E-init%E8%AF%BB%E5%8F%96%E5%86%99%E5%85%A5%E8%B7%A8%E6%A8%A1%E5%9D%97%E8%B0%83%E7%94%A8%E9%94%99%E8%AF%AF%E7%82%B9%E8%BF%94%E5%9B%9E%E4%B8%8E%E9%87%8D%E8%AF%95%E5%AE%8C%E6%95%B4%E7%89%88">URMA / OS 与 Init、读取、写入：跨模块调用、错误点、返回与重试（完整版）</h1>
+<p><strong>目标</strong>：覆盖 <code>client1 / worker1 / worker2 / worker3</code> 调用链上，和 <strong>URMA 接口</strong>、<strong>OS/syscall</strong> 相关的主要失败点；按 <code>(a)/(b)/(c)</code> 形式说明：失败条件、错误码、日志、返回方式、是否重试。<br>
+<strong>仓库</strong>：<code>yuanrong-datasystem</code>。<br>
+<strong>说明</strong>：<code>worker2</code> 表示元数据逻辑对端（实现可能是 Master / etcd 链路）；<code>worker3</code> 表示数据副本 Worker。</p>
+<hr>
+<h2 id="0-%E5%91%BD%E5%90%8D%E7%BA%A6%E5%AE%9A">0) 命名约定</h2>
+<table>
+<thead>
+<tr>
+<th>记号</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client1</code></td>
+<td>SDK 进程内逻辑</td>
+</tr>
+<tr>
+<td><code>client1-&gt;worker1</code></td>
+<td>SDK 到入口 Worker 的 RPC</td>
+</tr>
+<tr>
+<td><code>worker1</code></td>
+<td>入口 Worker 本进程处理</td>
+</tr>
+<tr>
+<td><code>worker1-&gt;worker2</code></td>
+<td>入口 Worker 到元数据对端</td>
+</tr>
+<tr>
+<td><code>worker1-&gt;worker3</code></td>
+<td>入口 Worker 到数据副本 Worker</td>
+</tr>
+<tr>
+<td><code>worker3</code></td>
+<td>数据副本 Worker 本进程处理</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="1-sdk-init-%E9%80%BB%E8%BE%91%E9%87%8D%E7%82%B9%E5%BB%BA%E8%BF%9Efd-%E4%BC%A0%E9%80%92ub-%E6%8F%A1%E6%89%8B">1) SDK Init 逻辑（重点：建连、fd 传递、UB 握手）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>凭证与参数校验</td>
+<td><code>client1</code></td>
+<td><code>KVClient::Init</code><br><code>|_ ObjectClientImpl::Init</code><br><code>|_ ValidatePort/HostPort</code></td>
+<td>OS/URMA 无直接调用</td>
+<td>(a) 参数非法 -&gt; <code>K_INVALID</code>，日志含 host/port 校验信息</td>
+<td>直接 <code>RETURN</code>，无重试</td>
+</tr>
+<tr>
+<td>连接 worker 并注册客户端</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>InitClientWorkerConnect</code><br><code>|_ ClientWorkerRemoteApi::Init</code><br><code>|_ Connect</code><br><code>|_ RegisterClient</code></td>
+<td>OS：socket 建连（框架封装）</td>
+<td>(a) 建连失败 -&gt; <code>K_RPC_UNAVAILABLE/1002</code>，<code>Register client failed</code><br>(b) 超时 -&gt; <code>K_RPC_DEADLINE_EXCEEDED/1001</code></td>
+<td>失败直接返回；该步通常不走 <code>RetryOnError</code></td>
+</tr>
+<tr>
+<td>UDS fd 通道与收 fd</td>
+<td><code>client1</code>（对端 <code>worker1</code> 发 fd）</td>
+<td><code>PostRegisterClient</code><br><code>|_ RecvPageFd</code><br><code>|_ SockRecvFd</code></td>
+<td>OS/syscall：<code>sendmsg</code>、<code>recvmsg</code>、<code>close</code>（<code>fd_pass.cpp</code>）</td>
+<td>(a) <code>recvmsg</code> 异常 -&gt; <code>K_UNKNOWN_ERROR</code>，<code>Pass fd meets unexpected error: errno</code><br>(b) 收到非法 fd -&gt; <code>K_UNKNOWN_ERROR</code>，<code>We receive the invalid fd</code><br>(c) 空 fd 列表 -&gt; WARNING：<code>may exceed the max open fd limit</code></td>
+<td>读线程持续等待；GetClientFd 主流程注明“不重试”，失败多在后续 mmap 暴露</td>
+</tr>
+<tr>
+<td>UB 快速传输握手（可选）</td>
+<td><code>client1</code> + <code>client1-&gt;worker1</code></td>
+<td><code>PostRegisterClient</code><br><code>|_ LOG_IF_ERROR(FastTransportHandshake)</code><br><code>|_ InitializeFastTransportManager</code><br><code>|_ ExecOnceParrallelExchange</code><br><code>|_ ExchangeJfr</code></td>
+<td>URMA：<code>UrmaManager::Init</code> 链 + JFR 交换；OS：客户端 UB 池 <code>mmap</code></td>
+<td>(a) <code>urma_init</code> 等失败 -&gt; <code>K_URMA_ERROR/1004</code>，<code>Failed to urma init...</code><br>(b) UB 池 <code>mmap</code> 失败 -&gt; <code>K_OUT_OF_MEMORY/6</code>，<code>Failed to allocate memory buffer pool...</code><br>(c) <code>ExchangeJfr</code> 失败 -&gt; <code>K_URMA_ERROR/K_RUNTIME_ERROR</code></td>
+<td><strong>关键</strong>：<code>LOG_IF_ERROR</code> 只打 ERROR，不阻断 Init；表现为“握手失败但回退 TCP”</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="2-%E8%AF%BB%E5%8F%96%E6%B5%81%E7%A8%8Bgetmget%E9%87%8D%E7%82%B9%E8%A1%A5%E9%BD%90ub-%E5%A4%B1%E8%B4%A5---tcp-%E5%9B%9E%E9%80%80">2) 读取流程（Get/MGet，重点补齐：UB 失败 -&gt; TCP 回退）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)/(c)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前置校验与路由</td>
+<td><code>client1</code></td>
+<td><code>ObjectClientImpl::Get</code><br><code>|_ IsClientReady</code><br><code>|_ CheckValidObjectKeyVector</code><br><code>|_ GetAvailableWorkerApi</code></td>
+<td>无 URMA/syscall 直接调用</td>
+<td>(a) 参数问题 -&gt; <code>K_INVALID</code><br>(b) 客户端状态问题 -&gt; <code>K_NOT_READY</code></td>
+<td>直接返回，无重试</td>
+</tr>
+<tr>
+<td><strong>UB 缓冲准备（读）</strong></td>
+<td><code>client1</code></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ PrepareUrmaBuffer</code><br><code>|_ GetMemoryBufferHandle/GetMemoryBufferInfo</code></td>
+<td>URMA：客户端 UB 缓冲池与地址信息</td>
+<td><strong>(a) UB 准备失败 -&gt; WARNING + 回退 TCP</strong>：<code>Prepare UB Get request failed: ..., fallback to TCP/IP payload.</code>（<code>client_worker_base_api.cpp</code>）<br>(b) UB 准备成功 -&gt; 请求携带 <code>urma_info</code> + <code>ub_buffer_size</code></td>
+<td><strong>这是“UB 失败切 TCP”的核心逻辑</strong>；不抛 URMA 码给上层，继续走 Get RPC</td>
+</tr>
+<tr>
+<td>Get 控制面 RPC</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Get</code></td>
+<td>OS：网络连接（框架封装）</td>
+<td>(a) RPC 不可用/超时/try_again -&gt; <code>1002/1001/19</code><br>(b) worker <code>last_rc</code> 为 timeout/try_again 触发重试<br>(c) <code>last_rc=K_OUT_OF_MEMORY</code> 且 all failed 触发重试</td>
+<td>走 <code>RetryOnError</code>（<code>RETRY_ERROR_CODE</code>）；失败消息追加 <code>RPC Retry detail</code></td>
+</tr>
+<tr>
+<td>worker1 处理与元数据查询</td>
+<td><code>worker1</code> + <code>worker1-&gt;worker2</code></td>
+<td><code>WorkerOcServiceGetImpl::Get</code><br><code>|_ ProcessGetObjectRequest</code><br><code>|_ TryGetObjectFromLocal</code><br><code>|_ QueryMeta / etcd</code></td>
+<td>OS：etcd/grpc 网络；URMA 无直接</td>
+<td>(a) <code>etcd is unavailable</code> -&gt; <code>K_RPC_UNAVAILABLE/1002</code><br>(b) query meta 失败 -&gt; <code>K_RUNTIME_ERROR</code> 等</td>
+<td>多经 worker 响应 <code>last_rc</code> 回 client1</td>
+</tr>
+<tr>
+<td>远端拉取与 URMA 数据面</td>
+<td><code>worker1-&gt;worker3</code> + <code>worker3</code></td>
+<td><code>GetObjectFromRemote...</code><br><code>|_ worker3 处理</code><br><code>|_ UrmaWritePayload/urma_write</code><br><code>|_ worker1 PollJfcWait</code></td>
+<td>URMA：<code>urma_write</code>、<code>urma_read</code>、<code>urma_poll_jfc</code>、<code>urma_wait_jfc</code>、<code>urma_ack_jfc</code>、<code>urma_rearm_jfc</code></td>
+<td>(a) <code>urma_write/read</code> 失败 -&gt; <code>K_RUNTIME_ERROR</code>，<code>Failed to urma write/read...</code><br>(b) poll/wait/rearm 失败 -&gt; <code>K_URMA_ERROR</code>，<code>Failed to poll/wait/rearm jfc...</code><br>(c) 连接不稳 -&gt; <code>K_URMA_NEED_CONNECT/1006</code></td>
+<td>由 worker1 汇总为 <code>last_rc</code> 或 RPC 状态返回；与 client1 重试叠加</td>
+</tr>
+<tr>
+<td>返回后 UB 组装与 SHM/payload 解析</td>
+<td><code>client1</code></td>
+<td><code>FillUrmaBuffer</code><br><code>|_ GetBuffersFromWorker</code><br><code>|_ GetObjectBuffers</code><br><code>|_ MmapShmUnit / SetNonShmObjectBuffer</code></td>
+<td>URMA：UB 数据回填；OS：<code>mmap</code>（通过 mmap manager）</td>
+<td>(a) UB payload 越界/非法 -&gt; <code>K_RUNTIME_ERROR</code>，<code>Invalid UB payload size</code> / <code>UB payload overflow</code><br>(b) SHM 映射失败 -&gt; <code>K_RUNTIME_ERROR</code>，<code>Get mmap entry failed</code><br>(c) payload 索引或拷贝失败 -&gt; <code>K_UNKNOWN_ERROR/K_RUNTIME_ERROR</code></td>
+<td><code>FillUrmaBuffer</code> 失败会直接返回（即使 RPC 已成功）；本段无统一重试</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="3-%E5%86%99%E5%85%A5%E6%B5%81%E7%A8%8Bputmset%E9%87%8D%E7%82%B9ub-%E5%86%99publish-%E9%87%8D%E8%AF%95">3) 写入流程（Put/MSet，重点：UB 写、Publish 重试）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前置校验与路径选择</td>
+<td><code>client1</code></td>
+<td><code>ObjectClientImpl::Put/MSet</code><br><code>|_ ShmCreateable / IsUrmaEnabled</code></td>
+<td>无直接 URMA/syscall</td>
+<td>(a) 参数非法 -&gt; <code>K_INVALID</code></td>
+<td>直接返回</td>
+</tr>
+<tr>
+<td>单对象 UB 发送（可选）</td>
+<td><code>client1</code></td>
+<td><code>SendBufferViaUb</code><br><code>|_ GetMemoryBufferHandle</code><br><code>|_ memcpy</code><br><code>|_ UrmaWritePayload</code></td>
+<td>URMA：<code>UrmaWritePayload</code>；OS：内存拷贝</td>
+<td>(a) UB 发送失败 -&gt; <code>K_INVALID</code>，<code>Failed to send buffer via UB</code><br>(b) UB 成功 -&gt; INFO <code>[UB Put] UrmaWritePayload done...</code></td>
+<td>失败回上层，可退回非 UB 路径</td>
+</tr>
+<tr>
+<td>Publish / MultiPublish 控制面</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>Publish/MultiPublish</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Publish/MultiPublish</code></td>
+<td>OS：网络连接</td>
+<td>(a) 传输失败 -&gt; <code>1002/1001/19</code>（重试）<br>(b) MultiPublish 还可重试 <code>K_SCALING/32</code>、<code>K_OUT_OF_MEMORY/6</code></td>
+<td>走 <code>RetryOnError</code>；Publish 重试 seal 时 <code>K_OC_ALREADY_SEALED</code> 可视成功</td>
+</tr>
+<tr>
+<td>worker1/worker3 写入数据面</td>
+<td><code>worker1-&gt;worker3</code> + <code>worker3</code></td>
+<td>写路径对称读路径<br><code>|_ URMA write/poll</code></td>
+<td>URMA 同读路径</td>
+<td>(a) URMA 完成错误 -&gt; <code>K_URMA_ERROR/K_RUNTIME_ERROR</code><br>(b) 远端不可达 -&gt; <code>K_URMA_NEED_CONNECT</code> / RPC 错</td>
+<td>多由 worker 响应回 client1</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="4-urma-%E6%8E%A5%E5%8F%A3%E6%B8%85%E5%8D%95%E5%B0%BD%E5%8F%AF%E8%83%BD%E5%85%A8%E6%9D%A5%E8%87%AA-urmamanagercpp-%E7%9B%B4%E6%8E%A5%E8%B0%83%E7%94%A8">4) URMA 接口清单（尽可能全，来自 <code>urma_manager.cpp</code> 直接调用）</h2>
+<blockquote>
+<p>这一节是“接口覆盖清单”，用于确认表格没漏大类调用。以下均在仓库里有直接符号调用。</p>
+</blockquote>
+<p><code>urma_init</code>, <code>urma_uninit</code>, <code>urma_register_log_func</code>, <code>urma_unregister_log_func</code>,<br>
+<code>urma_get_device_list</code>, <code>urma_get_device_by_name</code>, <code>urma_query_device</code>,<br>
+<code>urma_get_eid_list</code>, <code>urma_free_eid_list</code>,<br>
+<code>urma_create_context</code>, <code>urma_delete_context</code>,<br>
+<code>urma_create_jfce</code>, <code>urma_delete_jfce</code>,<br>
+<code>urma_create_jfc</code>, <code>urma_delete_jfc</code>, <code>urma_rearm_jfc</code>,<br>
+<code>urma_create_jfs</code>, <code>urma_delete_jfs</code>,<br>
+<code>urma_create_jfr</code>, <code>urma_delete_jfr</code>,<br>
+<code>urma_register_seg</code>, <code>urma_unregister_seg</code>,<br>
+<code>urma_import_seg</code>, <code>urma_unimport_seg</code>,<br>
+<code>urma_import_jfr</code>, <code>urma_unimport_jfr</code>, <code>urma_advise_jfr</code>,<br>
+<code>urma_write</code>, <code>urma_read</code>, <code>urma_post_jfs_wr</code>,<br>
+<code>urma_wait_jfc</code>, <code>urma_poll_jfc</code>, <code>urma_ack_jfc</code>.</p>
+<hr>
+<h2 id="5-ossyscall-%E6%B8%85%E5%8D%95%E8%AF%BB%E5%86%99%E5%88%9D%E5%A7%8B%E5%8C%96%E9%93%BE%E8%B7%AF%E5%B0%BD%E5%8F%AF%E8%83%BD%E5%85%A8">5) OS/syscall 清单（读写初始化链路，尽可能全）</h2>
+<table>
+<thead>
+<tr>
+<th>syscall / OS 接口</th>
+<th>主要位置</th>
+<th>关联流程</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sendmsg</code> / <code>recvmsg</code></td>
+<td><code>common/util/fd_pass.cpp</code> (<code>SockSendFd</code>/<code>SockRecvFd</code>)</td>
+<td>Init 后 UDS 传 fd，读路径 SHM 回数</td>
+</tr>
+<tr>
+<td><code>close</code></td>
+<td><code>fd_pass.cpp</code>；<code>client_worker_common_api.cpp</code>（过期 fd 清理）</td>
+<td>Init/运行期 fd 生命周期</td>
+</tr>
+<tr>
+<td><code>mmap</code> / <code>munmap</code></td>
+<td><code>urma_manager.cpp</code>（UB 客户端缓冲池）</td>
+<td>Init、UB 数据面</td>
+</tr>
+<tr>
+<td>socket 建连（框架封装）</td>
+<td><code>client_worker_common_api.cpp</code> 连接链</td>
+<td>Init、读写控制面 RPC</td>
+</tr>
+<tr>
+<td><code>usleep</code></td>
+<td><code>urma_manager.cpp::PollJfcWait</code></td>
+<td>URMA 轮询等待路径</td>
+</tr>
+<tr>
+<td>内存拷贝（<code>memcpy</code>/<code>MemoryCopy</code>）</td>
+<td><code>client_worker_base_api.cpp</code>、<code>object_client_impl.cpp</code></td>
+<td>读写 payload/UB 组装（非 syscall，但关键 OS 资源点）</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="6-%E8%BF%99%E7%89%88%E7%9B%B8%E5%AF%B9%E4%B8%8A%E4%B8%80%E7%89%88%E8%A1%A5%E9%BD%90%E7%82%B9">6) 这版相对上一版补齐点</h2>
+<ol>
+<li>补了读取流程里 <strong>“UB 失败切 TCP”</strong> 的明确行和日志原文。</li>
+<li>增加 URMA 接口全集（<code>urma_manager.cpp</code> 直接调用集合）。</li>
+<li>增加 OS/syscall 清单，并指明在哪条链路使用。</li>
+<li>每个大步骤按 <code>(a)/(b)/(c)</code> 给出错误码、日志、返回方式、是否重试。</li>
+</ol>
+<h1 id="urma--os-%E4%B8%8E-init%E8%AF%BB%E5%8F%96%E5%86%99%E5%85%A5%E8%B7%A8%E6%A8%A1%E5%9D%97%E8%B0%83%E7%94%A8%E9%94%99%E8%AF%AF%E7%82%B9%E8%BF%94%E5%9B%9E%E4%B8%8E%E9%87%8D%E8%AF%95%E5%AE%8C%E6%95%B4%E7%89%88">URMA / OS 与 Init、读取、写入：跨模块调用、错误点、返回与重试（完整版）</h1>
+<p><strong>目标</strong>：覆盖 <code>client1 / worker1 / worker2 / worker3</code> 调用链上，和 <strong>URMA 接口</strong>、<strong>OS/syscall</strong> 相关的主要失败点；按 <code>(a)/(b)/(c)</code> 形式说明：失败条件、错误码、日志、返回方式、是否重试。<br>
+<strong>仓库</strong>：<code>yuanrong-datasystem</code>。<br>
+<strong>说明</strong>：<code>worker2</code> 表示元数据逻辑对端（实现可能是 Master / etcd 链路）；<code>worker3</code> 表示数据副本 Worker。</p>
+<hr>
+<h2 id="0-%E5%91%BD%E5%90%8D%E7%BA%A6%E5%AE%9A">0) 命名约定</h2>
+<table>
+<thead>
+<tr>
+<th>记号</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client1</code></td>
+<td>SDK 进程内逻辑</td>
+</tr>
+<tr>
+<td><code>client1-&gt;worker1</code></td>
+<td>SDK 到入口 Worker 的 RPC</td>
+</tr>
+<tr>
+<td><code>worker1</code></td>
+<td>入口 Worker 本进程处理</td>
+</tr>
+<tr>
+<td><code>worker1-&gt;worker2</code></td>
+<td>入口 Worker 到元数据对端</td>
+</tr>
+<tr>
+<td><code>worker1-&gt;worker3</code></td>
+<td>入口 Worker 到数据副本 Worker</td>
+</tr>
+<tr>
+<td><code>worker3</code></td>
+<td>数据副本 Worker 本进程处理</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="1-sdk-init-%E9%80%BB%E8%BE%91%E9%87%8D%E7%82%B9%E5%BB%BA%E8%BF%9Efd-%E4%BC%A0%E9%80%92ub-%E6%8F%A1%E6%89%8B">1) SDK Init 逻辑（重点：建连、fd 传递、UB 握手）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>凭证与参数校验</td>
+<td><code>client1</code></td>
+<td><code>KVClient::Init</code><br><code>|_ ObjectClientImpl::Init</code><br><code>|_ ValidatePort/HostPort</code></td>
+<td>OS/URMA 无直接调用</td>
+<td>(a) 参数非法 -&gt; <code>K_INVALID</code>，日志含 host/port 校验信息</td>
+<td>直接 <code>RETURN</code>，无重试</td>
+</tr>
+<tr>
+<td>连接 worker 并注册客户端</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>InitClientWorkerConnect</code><br><code>|_ ClientWorkerRemoteApi::Init</code><br><code>|_ Connect</code><br><code>|_ RegisterClient</code></td>
+<td>OS：socket 建连（框架封装）</td>
+<td>(a) 建连失败 -&gt; <code>K_RPC_UNAVAILABLE/1002</code>，<code>Register client failed</code><br>(b) 超时 -&gt; <code>K_RPC_DEADLINE_EXCEEDED/1001</code></td>
+<td>失败直接返回；该步通常不走 <code>RetryOnError</code></td>
+</tr>
+<tr>
+<td>UDS fd 通道与收 fd</td>
+<td><code>client1</code>（对端 <code>worker1</code> 发 fd）</td>
+<td><code>PostRegisterClient</code><br><code>|_ RecvPageFd</code><br><code>|_ SockRecvFd</code></td>
+<td>OS/syscall：<code>sendmsg</code>、<code>recvmsg</code>、<code>close</code>（<code>fd_pass.cpp</code>）</td>
+<td>(a) <code>recvmsg</code> 异常 -&gt; <code>K_UNKNOWN_ERROR</code>，<code>Pass fd meets unexpected error: errno</code><br>(b) 收到非法 fd -&gt; <code>K_UNKNOWN_ERROR</code>，<code>We receive the invalid fd</code><br>(c) 空 fd 列表 -&gt; WARNING：<code>may exceed the max open fd limit</code></td>
+<td>读线程持续等待；GetClientFd 主流程注明“不重试”，失败多在后续 mmap 暴露</td>
+</tr>
+<tr>
+<td>UB 快速传输握手（可选）</td>
+<td><code>client1</code> + <code>client1-&gt;worker1</code></td>
+<td><code>PostRegisterClient</code><br><code>|_ LOG_IF_ERROR(FastTransportHandshake)</code><br><code>|_ InitializeFastTransportManager</code><br><code>|_ ExecOnceParrallelExchange</code><br><code>|_ ExchangeJfr</code></td>
+<td>URMA：<code>UrmaManager::Init</code> 链 + JFR 交换；OS：客户端 UB 池 <code>mmap</code></td>
+<td>(a) <code>urma_init</code> 等失败 -&gt; <code>K_URMA_ERROR/1004</code>，<code>Failed to urma init...</code><br>(b) UB 池 <code>mmap</code> 失败 -&gt; <code>K_OUT_OF_MEMORY/6</code>，<code>Failed to allocate memory buffer pool...</code><br>(c) <code>ExchangeJfr</code> 失败 -&gt; <code>K_URMA_ERROR/K_RUNTIME_ERROR</code></td>
+<td><strong>关键</strong>：<code>LOG_IF_ERROR</code> 只打 ERROR，不阻断 Init；表现为“握手失败但回退 TCP”</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="2-%E8%AF%BB%E5%8F%96%E6%B5%81%E7%A8%8Bgetmget%E9%87%8D%E7%82%B9%E8%A1%A5%E9%BD%90ub-%E5%A4%B1%E8%B4%A5---tcp-%E5%9B%9E%E9%80%80">2) 读取流程（Get/MGet，重点补齐：UB 失败 -&gt; TCP 回退）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)/(c)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前置校验与路由</td>
+<td><code>client1</code></td>
+<td><code>ObjectClientImpl::Get</code><br><code>|_ IsClientReady</code><br><code>|_ CheckValidObjectKeyVector</code><br><code>|_ GetAvailableWorkerApi</code></td>
+<td>无 URMA/syscall 直接调用</td>
+<td>(a) 参数问题 -&gt; <code>K_INVALID</code><br>(b) 客户端状态问题 -&gt; <code>K_NOT_READY</code></td>
+<td>直接返回，无重试</td>
+</tr>
+<tr>
+<td><strong>UB 缓冲准备（读）</strong></td>
+<td><code>client1</code></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ PrepareUrmaBuffer</code><br><code>|_ GetMemoryBufferHandle/GetMemoryBufferInfo</code></td>
+<td>URMA：客户端 UB 缓冲池与地址信息</td>
+<td><strong>(a) UB 准备失败 -&gt; WARNING + 回退 TCP</strong>：<code>Prepare UB Get request failed: ..., fallback to TCP/IP payload.</code>（<code>client_worker_base_api.cpp</code>）<br>(b) UB 准备成功 -&gt; 请求携带 <code>urma_info</code> + <code>ub_buffer_size</code></td>
+<td><strong>这是“UB 失败切 TCP”的核心逻辑</strong>；不抛 URMA 码给上层，继续走 Get RPC</td>
+</tr>
+<tr>
+<td>Get 控制面 RPC</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Get</code></td>
+<td>OS：网络连接（框架封装）</td>
+<td>(a) RPC 不可用/超时/try_again -&gt; <code>1002/1001/19</code><br>(b) worker <code>last_rc</code> 为 timeout/try_again 触发重试<br>(c) <code>last_rc=K_OUT_OF_MEMORY</code> 且 all failed 触发重试</td>
+<td>走 <code>RetryOnError</code>（<code>RETRY_ERROR_CODE</code>）；失败消息追加 <code>RPC Retry detail</code></td>
+</tr>
+<tr>
+<td>worker1 处理与元数据查询</td>
+<td><code>worker1</code> + <code>worker1-&gt;worker2</code></td>
+<td><code>WorkerOcServiceGetImpl::Get</code><br><code>|_ ProcessGetObjectRequest</code><br><code>|_ TryGetObjectFromLocal</code><br><code>|_ QueryMeta / etcd</code></td>
+<td>OS：etcd/grpc 网络；URMA 无直接</td>
+<td>(a) <code>etcd is unavailable</code> -&gt; <code>K_RPC_UNAVAILABLE/1002</code><br>(b) query meta 失败 -&gt; <code>K_RUNTIME_ERROR</code> 等</td>
+<td>多经 worker 响应 <code>last_rc</code> 回 client1</td>
+</tr>
+<tr>
+<td>远端拉取与 URMA 数据面</td>
+<td><code>worker1-&gt;worker3</code> + <code>worker3</code></td>
+<td><code>GetObjectFromRemote...</code><br><code>|_ worker3 处理</code><br><code>|_ UrmaWritePayload/urma_write</code><br><code>|_ worker1 PollJfcWait</code></td>
+<td>URMA：<code>urma_write</code>、<code>urma_read</code>、<code>urma_poll_jfc</code>、<code>urma_wait_jfc</code>、<code>urma_ack_jfc</code>、<code>urma_rearm_jfc</code></td>
+<td>(a) <code>urma_write/read</code> 失败 -&gt; <code>K_RUNTIME_ERROR</code>，<code>Failed to urma write/read...</code><br>(b) poll/wait/rearm 失败 -&gt; <code>K_URMA_ERROR</code>，<code>Failed to poll/wait/rearm jfc...</code><br>(c) 连接不稳 -&gt; <code>K_URMA_NEED_CONNECT/1006</code></td>
+<td>由 worker1 汇总为 <code>last_rc</code> 或 RPC 状态返回；与 client1 重试叠加</td>
+</tr>
+<tr>
+<td>返回后 UB 组装与 SHM/payload 解析</td>
+<td><code>client1</code></td>
+<td><code>FillUrmaBuffer</code><br><code>|_ GetBuffersFromWorker</code><br><code>|_ GetObjectBuffers</code><br><code>|_ MmapShmUnit / SetNonShmObjectBuffer</code></td>
+<td>URMA：UB 数据回填；OS：<code>mmap</code>（通过 mmap manager）</td>
+<td>(a) UB payload 越界/非法 -&gt; <code>K_RUNTIME_ERROR</code>，<code>Invalid UB payload size</code> / <code>UB payload overflow</code><br>(b) SHM 映射失败 -&gt; <code>K_RUNTIME_ERROR</code>，<code>Get mmap entry failed</code><br>(c) payload 索引或拷贝失败 -&gt; <code>K_UNKNOWN_ERROR/K_RUNTIME_ERROR</code></td>
+<td><code>FillUrmaBuffer</code> 失败会直接返回（即使 RPC 已成功）；本段无统一重试</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="3-%E5%86%99%E5%85%A5%E6%B5%81%E7%A8%8Bputmset%E9%87%8D%E7%82%B9ub-%E5%86%99publish-%E9%87%8D%E8%AF%95">3) 写入流程（Put/MSet，重点：UB 写、Publish 重试）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA / OS 接口覆盖</th>
+<th>失败分支（<code>(a)/(b)</code>）</th>
+<th>返回方式与重试</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前置校验与路径选择</td>
+<td><code>client1</code></td>
+<td><code>ObjectClientImpl::Put/MSet</code><br><code>|_ ShmCreateable / IsUrmaEnabled</code></td>
+<td>无直接 URMA/syscall</td>
+<td>(a) 参数非法 -&gt; <code>K_INVALID</code></td>
+<td>直接返回</td>
+</tr>
+<tr>
+<td>单对象 UB 发送（可选）</td>
+<td><code>client1</code></td>
+<td><code>SendBufferViaUb</code><br><code>|_ GetMemoryBufferHandle</code><br><code>|_ memcpy</code><br><code>|_ UrmaWritePayload</code></td>
+<td>URMA：<code>UrmaWritePayload</code>；OS：内存拷贝</td>
+<td>(a) UB 发送失败 -&gt; <code>K_INVALID</code>，<code>Failed to send buffer via UB</code><br>(b) UB 成功 -&gt; INFO <code>[UB Put] UrmaWritePayload done...</code></td>
+<td>失败回上层，可退回非 UB 路径</td>
+</tr>
+<tr>
+<td>Publish / MultiPublish 控制面</td>
+<td><code>client1-&gt;worker1</code></td>
+<td><code>Publish/MultiPublish</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Publish/MultiPublish</code></td>
+<td>OS：网络连接</td>
+<td>(a) 传输失败 -&gt; <code>1002/1001/19</code>（重试）<br>(b) MultiPublish 还可重试 <code>K_SCALING/32</code>、<code>K_OUT_OF_MEMORY/6</code></td>
+<td>走 <code>RetryOnError</code>；Publish 重试 seal 时 <code>K_OC_ALREADY_SEALED</code> 可视成功</td>
+</tr>
+<tr>
+<td>worker1/worker3 写入数据面</td>
+<td><code>worker1-&gt;worker3</code> + <code>worker3</code></td>
+<td>写路径对称读路径<br><code>|_ URMA write/poll</code></td>
+<td>URMA 同读路径</td>
+<td>(a) URMA 完成错误 -&gt; <code>K_URMA_ERROR/K_RUNTIME_ERROR</code><br>(b) 远端不可达 -&gt; <code>K_URMA_NEED_CONNECT</code> / RPC 错</td>
+<td>多由 worker 响应回 client1</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="4-urma-%E6%8E%A5%E5%8F%A3%E6%B8%85%E5%8D%95%E5%B0%BD%E5%8F%AF%E8%83%BD%E5%85%A8%E6%9D%A5%E8%87%AA-urmamanagercpp-%E7%9B%B4%E6%8E%A5%E8%B0%83%E7%94%A8">4) URMA 接口清单（尽可能全，来自 <code>urma_manager.cpp</code> 直接调用）</h2>
+<blockquote>
+<p>这一节是“接口覆盖清单”，用于确认表格没漏大类调用。以下均在仓库里有直接符号调用。</p>
+</blockquote>
+<p><code>urma_init</code>, <code>urma_uninit</code>, <code>urma_register_log_func</code>, <code>urma_unregister_log_func</code>,<br>
+<code>urma_get_device_list</code>, <code>urma_get_device_by_name</code>, <code>urma_query_device</code>,<br>
+<code>urma_get_eid_list</code>, <code>urma_free_eid_list</code>,<br>
+<code>urma_create_context</code>, <code>urma_delete_context</code>,<br>
+<code>urma_create_jfce</code>, <code>urma_delete_jfce</code>,<br>
+<code>urma_create_jfc</code>, <code>urma_delete_jfc</code>, <code>urma_rearm_jfc</code>,<br>
+<code>urma_create_jfs</code>, <code>urma_delete_jfs</code>,<br>
+<code>urma_create_jfr</code>, <code>urma_delete_jfr</code>,<br>
+<code>urma_register_seg</code>, <code>urma_unregister_seg</code>,<br>
+<code>urma_import_seg</code>, <code>urma_unimport_seg</code>,<br>
+<code>urma_import_jfr</code>, <code>urma_unimport_jfr</code>, <code>urma_advise_jfr</code>,<br>
+<code>urma_write</code>, <code>urma_read</code>, <code>urma_post_jfs_wr</code>,<br>
+<code>urma_wait_jfc</code>, <code>urma_poll_jfc</code>, <code>urma_ack_jfc</code>.</p>
+<hr>
+<h2 id="5-ossyscall-%E6%B8%85%E5%8D%95%E8%AF%BB%E5%86%99%E5%88%9D%E5%A7%8B%E5%8C%96%E9%93%BE%E8%B7%AF%E5%B0%BD%E5%8F%AF%E8%83%BD%E5%85%A8">5) OS/syscall 清单（读写初始化链路，尽可能全）</h2>
+<table>
+<thead>
+<tr>
+<th>syscall / OS 接口</th>
+<th>主要位置</th>
+<th>关联流程</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sendmsg</code> / <code>recvmsg</code></td>
+<td><code>common/util/fd_pass.cpp</code> (<code>SockSendFd</code>/<code>SockRecvFd</code>)</td>
+<td>Init 后 UDS 传 fd，读路径 SHM 回数</td>
+</tr>
+<tr>
+<td><code>close</code></td>
+<td><code>fd_pass.cpp</code>；<code>client_worker_common_api.cpp</code>（过期 fd 清理）</td>
+<td>Init/运行期 fd 生命周期</td>
+</tr>
+<tr>
+<td><code>mmap</code> / <code>munmap</code></td>
+<td><code>urma_manager.cpp</code>（UB 客户端缓冲池）</td>
+<td>Init、UB 数据面</td>
+</tr>
+<tr>
+<td>socket 建连（框架封装）</td>
+<td><code>client_worker_common_api.cpp</code> 连接链</td>
+<td>Init、读写控制面 RPC</td>
+</tr>
+<tr>
+<td><code>usleep</code></td>
+<td><code>urma_manager.cpp::PollJfcWait</code></td>
+<td>URMA 轮询等待路径</td>
+</tr>
+<tr>
+<td>内存拷贝（<code>memcpy</code>/<code>MemoryCopy</code>）</td>
+<td><code>client_worker_base_api.cpp</code>、<code>object_client_impl.cpp</code></td>
+<td>读写 payload/UB 组装（非 syscall，但关键 OS 资源点）</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="6-%E8%BF%99%E7%89%88%E7%9B%B8%E5%AF%B9%E4%B8%8A%E4%B8%80%E7%89%88%E8%A1%A5%E9%BD%90%E7%82%B9">6) 这版相对上一版补齐点</h2>
+<ol>
+<li>补了读取流程里 <strong>“UB 失败切 TCP”</strong> 的明确行和日志原文。</li>
+<li>增加 URMA 接口全集（<code>urma_manager.cpp</code> 直接调用集合）。</li>
+<li>增加 OS/syscall 清单，并指明在哪条链路使用。</li>
+<li>每个大步骤按 <code>(a)/(b)/(c)</code> 给出错误码、日志、返回方式、是否重试。</li>
+</ol>
+<h1 id="urma--os%E6%96%87%E4%BB%B6%E4%B8%8E%E7%B3%BB%E7%BB%9F%E8%B0%83%E7%94%A8%E4%B8%8E%E8%AF%BB%E5%86%99init%E8%B7%A8%E6%A8%A1%E5%9D%97%E6%8A%A5%E9%94%99%E8%BF%94%E5%9B%9E%E6%96%B9%E5%BC%8F%E4%B8%8E%E9%87%8D%E8%AF%95">URMA / OS（文件与系统调用）与读写、Init：跨模块报错、返回方式与重试</h1>
+<p><strong>仓库</strong>：<code>yuanrong-datasystem</code>。<br>
+<strong>目标</strong>：按 <strong>大处理步骤</strong>（每表一行）对齐 <strong>发生位置（client1 / worker1 / 跨进程箭头）</strong>、<strong>树状调用链</strong>、<strong>URMA</strong>、<strong>OS</strong>、<strong>错误传播</strong>、<strong>重试</strong>。</p>
+<hr>
+<h2 id="%C2%A70-%E6%A8%A1%E5%9D%97%E5%91%BD%E5%90%8D%E7%BA%A6%E5%AE%9A%E4%B8%8E-excel--%E5%B7%A5%E5%8D%95%E5%AF%B9%E9%BD%90">§0 模块命名约定（与 Excel / 工单对齐）</h2>
+<table>
+<thead>
+<tr>
+<th>符号</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>client1</strong></td>
+<td>SDK 进程内（无跨进程 RPC）。</td>
+</tr>
+<tr>
+<td><strong>client1→worker1</strong></td>
+<td>客户端 <strong>stub</strong> 发往 <strong>入口 Worker</strong>（Register/Get/Publish 连的那台）。</td>
+</tr>
+<tr>
+<td><strong>worker1</strong></td>
+<td><strong>入口 Worker</strong> 进程内逻辑（不强调对哪发 RPC 时）。</td>
+</tr>
+<tr>
+<td><strong>worker1→worker2</strong></td>
+<td>入口 Worker 访问 <strong>元数据侧</strong>（实现上常为 Master/etcd/gRPC；填表时 <strong>worker2 = 逻辑对端</strong>，可注实际服务名）。</td>
+</tr>
+<tr>
+<td><strong>worker2</strong></td>
+<td>元数据对端 <strong>本进程内</strong>处理。</td>
+</tr>
+<tr>
+<td><strong>worker1→worker3</strong></td>
+<td>入口 Worker 对 <strong>数据副本 Worker</strong> 发 Worker↔Worker RPC。</td>
+</tr>
+<tr>
+<td><strong>worker3</strong></td>
+<td>数据副本 Worker <strong>本进程内</strong>处理（含 URMA Write 等）。</td>
+</tr>
+<tr>
+<td><strong>client1</strong>（RPC 返回后）</td>
+<td>响应已在 client1 进程内解析、UB 组装、mmap 等。</td>
+</tr>
+</tbody>
+</table>
+<p><strong>单元格内树状可读性</strong>：下一行以 <code>|_</code> 表示相对上一行的子步骤（子调用）；多跳 RPC 仍用 <strong>粗线</strong> <code>client1→worker1</code> 标在父行，子行 <code>|_</code> 只展开符号/文件。</p>
+<hr>
+<h2 id="%E5%88%97%E8%AF%B4%E6%98%8E%E4%B8%8B%E5%88%97%E4%B8%89%E8%A1%A8%E5%85%B1%E7%94%A8">列说明（下列三表共用）</h2>
+<table>
+<thead>
+<tr>
+<th>列</th>
+<th>含义</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>大处理内容</strong></td>
+<td>可独立观测的一段逻辑（工单分桶）。</td>
+</tr>
+<tr>
+<td><strong>发生位置</strong></td>
+<td>§0 符号；跨 RPC 必写箭头。</td>
+</tr>
+<tr>
+<td><strong>调用链（树）</strong></td>
+<td><code>|_</code> 缩进树 + 文件/符号，便于下钻。</td>
+</tr>
+<tr>
+<td><strong>URMA</strong></td>
+<td>UMDK / UB 相关问题。</td>
+</tr>
+<tr>
+<td><strong>OS / 文件 /  syscall</strong></td>
+<td>socket、<code>mmap</code>、<code>recvmsg</code> fd、<code>close</code> 等。</td>
+</tr>
+<tr>
+<td><strong>跨模块报错与传播</strong></td>
+<td><code>Status</code> / <code>last_rc</code> / 仅日志。</td>
+</tr>
+<tr>
+<td><strong>重试</strong></td>
+<td><code>RetryOnError</code> 等。</td>
+</tr>
+<tr>
+<td><strong>典型 Status / 关键词</strong></td>
+<td>常见码与日志。</td>
+</tr>
+</tbody>
+</table>
+<p><strong>重试与码集</strong>（未改）：<code>rpc_util.h</code> 的 <code>RetryOnError</code>；<code>IsRpcTimeoutOrTryAgain</code>；<code>client_worker_remote_api.cpp</code> 的 <code>RETRY_ERROR_CODE</code>。</p>
+<hr>
+<h2 id="1-sdk-%E5%88%9D%E5%A7%8B%E5%8C%96kvclientinit-%E2%86%92-objectclientimplinit-%E2%86%92-initclientworkerconnect">1. SDK 初始化（<code>KVClient::Init</code> → <code>ObjectClientImpl::Init</code> → <code>InitClientWorkerConnect</code>）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA</th>
+<th>OS / syscall</th>
+<th>跨模块报错与传播</th>
+<th>重试</th>
+<th>典型 Status / 关键词</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>凭证与 HostPort 校验</td>
+<td><strong>client1</strong></td>
+<td><code>KVClient::Init</code><br><code>|_ ObjectClientImpl::Init</code><br><code>|_ RpcAuthKeyManager::CreateClientCredentials</code><br><code>|_ Validator::{ValidatePort,ValidateHostPortString}</code></td>
+<td>—</td>
+<td>—</td>
+<td><strong>直接 <code>RETURN</code></strong>，未出本进程</td>
+<td>无</td>
+<td><code>K_INVALID</code></td>
+</tr>
+<tr>
+<td>Remote API 构造与 Init</td>
+<td><strong>client1</strong></td>
+<td><code>ObjectClientImpl::InitClientWorkerConnect</code><br><code>|_ ClientWorkerRemoteApi::Init</code><br><code>|_ decreaseRPCQ_-&gt;Init</code>（SHM 环形队列）</td>
+<td>—</td>
+<td>队列底层或带 errno</td>
+<td><code>RETURN_IF_NOT_OK_PRINT_ERROR_MSG</code> → <strong>Init 失败</strong></td>
+<td>无</td>
+<td><code>Init failed with shm circular queue</code></td>
+</tr>
+<tr>
+<td>TCP 建连 + RegisterClient</td>
+<td><strong>client1→worker1</strong></td>
+<td><code>ClientWorkerRemoteCommonApi::Connect</code><br><code>|_ stub_-&gt;RegisterClient</code>（ZMQ 等）<br><code>worker1</code>（对端）<br><code>|_ Worker 侧 Register 处理</code></td>
+<td>—</td>
+<td><strong>client1</strong>：socket 创建/连接</td>
+<td><strong>RPC <code>Status</code> 原样返回</strong>；<code>Register client failed</code></td>
+<td>无（本步无 <code>RetryOnError</code>）</td>
+<td><code>1002</code>/<code>1001</code>/<code>19</code></td>
+</tr>
+<tr>
+<td>注册后：心跳参数、UDS 收 fd</td>
+<td><strong>client1</strong><br>（对端 <strong>worker1</strong> 发 fd）</td>
+<td><code>PostRegisterClient</code><br><code>|_ RecvPageFd 线程</code><br><code>|_ SockRecvFd(socketFd_, …)</code></td>
+<td>—</td>
+<td><strong><code>recvmsg</code> SCM_RIGHTS</strong>；<code>close</code> 过期 fd</td>
+<td>收 fd 失败多 <strong><code>LOG(WARNING)</code></strong>；致命则后续 mmap 才暴露</td>
+<td>线程循环等待</td>
+<td><code>recv page fd … failed</code></td>
+</tr>
+<tr>
+<td>UB 快速传输握手（可选）</td>
+<td><strong>client1</strong><br><strong>client1→worker1</strong></td>
+<td><code>PostRegisterClient</code><br><code>|_ LOG_IF_ERROR(FastTransportHandshake)</code><br><code>client1</code><br><code>|_ UrmaManager::Init</code> → <code>UrmaInit</code>…<code>InitMemoryBufferPool</code><br><code>client1→worker1</code><br><code>|_ InitializeFastTransportManager</code><br><code>|_ WorkerRemoteWorkerTransApi::Init</code><br><code>|_ ExecOnceParrallelExchange</code><br><code>|_ ExchangeJfr</code>（与入口 Worker UB 信息交换）</td>
+<td><code>urma_*</code> 失败 → <code>K_URMA_ERROR</code> 等<br>（见握手链）</td>
+<td><strong>UB 池</strong> <code>mmap(ANON)</code> 失败</td>
+<td><strong><code>LOG_IF_ERROR</code>：只 <code>LOG(ERROR)</code>，不 <code>RETURN</code> Init</strong> → Init 仍可能 OK，运行期退 <strong>TCP</strong></td>
+<td>握手内无全局 <code>RetryOnError</code></td>
+<td><code>Fast transport handshake failed…fall back to TCP</code></td>
+</tr>
+<tr>
+<td>MmapManager / ListenWorker</td>
+<td><strong>client1</strong></td>
+<td><code>InitClientWorkerConnect</code><br><code>|_ MmapManager(...)</code><br><code>|_ ListenWorker::StartListenWorker</code></td>
+<td>—</td>
+<td>运行期大量 mmap</td>
+<td>启动失败 <code>RETURN</code></td>
+<td>视实现</td>
+<td>心跳/切流 <code>1002</code>/<code>23</code> 多运行期</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="2-%E8%AF%BB%E8%B7%AF%E5%BE%84get--mget">2. 读路径（<code>Get</code> / <code>MGet</code>）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA</th>
+<th>OS / syscall</th>
+<th>跨模块报错与传播</th>
+<th>重试</th>
+<th>典型 Status / 关键词</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>就绪、batch、选入口 Worker</td>
+<td><strong>client1</strong></td>
+<td><code>ObjectClientImpl::Get</code><br><code>|_ IsClientReady / CheckValidObjectKeyVector</code><br><code>|_ GetAvailableWorkerApi</code></td>
+<td>—</td>
+<td>—</td>
+<td><strong><code>RETURN</code></strong></td>
+<td>无</td>
+<td><code>K_INVALID</code>/<code>K_NOT_READY</code>/<code>1002</code></td>
+</tr>
+<tr>
+<td>组 Get 请求 + UB 缓冲准备</td>
+<td><strong>client1</strong></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ PreGet</code><br><code>|_ PrepareUrmaBuffer</code></td>
+<td>池未初始化、<code>GetMemoryBufferHandle</code> 失败</td>
+<td>—</td>
+<td><strong>仅 <code>LOG(WARNING)</code> + 降级</strong>，<strong>不返回 URMA 码</strong></td>
+<td>无</td>
+<td><code>fallback to TCP/IP payload</code></td>
+</tr>
+<tr>
+<td>Get 控制面 RPC</td>
+<td><strong>client1→worker1</strong></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Get</code><br><code>worker1</code><br><code>|_ WorkerOcServiceGetImpl::Get</code> → <code>ProcessGetObjectRequest</code>（总入口）</td>
+<td>—</td>
+<td>网络栈</td>
+<td>传输：<strong><code>Status</code></strong>；业务：<strong><code>rsp.last_rc</code></strong>；lambda 内 <strong>timeout/try-again 或 OOM+全失败</strong> 触发重试</td>
+<td><strong>是</strong> <code>RETRY_ERROR_CODE</code> + 上式</td>
+<td><code>1001</code>/<code>1002</code>/<code>19</code>/<code>6</code>；<code>Start to send rpc…</code></td>
+</tr>
+<tr>
+<td>worker1 本地命中 / 未命中分支</td>
+<td><strong>worker1</strong></td>
+<td><code>ProcessGetObjectRequest</code><br><code>|_ TryGetObjectFromLocal</code><br><code>|_ TryGetObjectFromRemote</code>（未命中时）</td>
+<td>—</td>
+<td>本地盘/L2 等</td>
+<td><code>last_rc</code> / RPC</td>
+<td>部分路径 Worker 内重连</td>
+<td><code>K_NOT_FOUND</code> 等</td>
+</tr>
+<tr>
+<td>查元数据</td>
+<td><strong>worker1→worker2</strong></td>
+<td><code>TryGetObjectFromRemote</code> 前置链<br><code>|_ QueryMeta / etcd / Master</code>（依实现）<br><code>worker2</code><br><code>|_ 返回 meta 与地址</code></td>
+<td>—</td>
+<td>etcd 访问等 syscall</td>
+<td><strong><code>K_RPC_UNAVAILABLE</code>（如 etcd 续约）</strong> 等经 worker1 填响应</td>
+<td>Master 侧常有自有重试</td>
+<td><code>etcd is unavailable</code></td>
+</tr>
+<tr>
+<td>向数据副本发拉取 RPC</td>
+<td><strong>worker1→worker3</strong></td>
+<td><code>GetObjectFromRemote…</code><br><code>|_ CreateRemoteWorkerApi</code> / <code>stub</code> 对 worker3<br><code>worker3</code><br><code>|_ GetObjectRemote*</code> 处理</td>
+<td>—</td>
+<td>W↔W socket</td>
+<td>RPC <strong><code>Status</code></strong> / 后续填 <strong><code>last_rc</code></strong></td>
+<td><code>TryReconnectRemoteWorker</code> 等</td>
+<td><code>Get from remote failed</code></td>
+</tr>
+<tr>
+<td>worker3 UB 数据面</td>
+<td><strong>worker3</strong></td>
+<td><code>UrmaWritePayload</code> / <code>urma_write</code> / <code>PollJfcWait</code> 等<br><code>|_ （对端常为 worker1 侧 import/read）</code></td>
+<td><strong>主战场</strong></td>
+<td>TCP 回退时 socket</td>
+<td>错误经 <strong>worker1 编排</strong> 写入 <strong><code>last_rc</code></strong> 或 RPC</td>
+<td>与 client1 <code>RetryOnError</code> <strong>独立</strong></td>
+<td><code>1004</code>/<code>5</code>/<code>6</code></td>
+</tr>
+<tr>
+<td>RPC 成功后 client1 UB 组装</td>
+<td><strong>client1</strong></td>
+<td><code>ClientWorkerRemoteApi::Get</code><br><code>|_ FillUrmaBuffer</code></td>
+<td>—</td>
+<td><code>CopyBuffer</code> / 分配</td>
+<td><strong><code>RETURN_IF_NOT_OK</code></strong>（晚于 stub OK）</td>
+<td>无</td>
+<td><code>UB payload overflow</code> 等 <code>K_RUNTIME_ERROR</code></td>
+</tr>
+<tr>
+<td>解析响应 SHM / payload</td>
+<td><strong>client1</strong></td>
+<td><code>GetBuffersFromWorker</code><br><code>|_ GetObjectBuffers</code><br><code>|_ MmapShmUnit</code> / <code>SetNonShmObjectBuffer</code></td>
+<td>数据已在 UB 时多逻辑拷贝</td>
+<td><strong><code>mmap</code> store_fd</strong>；<code>MemoryCopy</code></td>
+<td><code>failedObjectKey</code>；全失败 <strong><code>last_rc</code>/<code>K_NOT_FOUND</code></strong></td>
+<td>无</td>
+<td><code>Get mmap entry failed</code></td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="3-%E5%86%99%E8%B7%AF%E5%BE%84put--mset-%E2%86%92-publish--multipublish">3. 写路径（<code>Put</code> / <code>MSet</code> → <code>Publish</code> / <code>MultiPublish</code>）</h2>
+<table>
+<thead>
+<tr>
+<th>大处理内容</th>
+<th>发生位置</th>
+<th>调用链（树）</th>
+<th>URMA</th>
+<th>OS / syscall</th>
+<th>跨模块报错与传播</th>
+<th>重试</th>
+<th>典型 Status / 关键词</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>前置与 SHM/UB 分支</td>
+<td><strong>client1</strong></td>
+<td><code>ObjectClientImpl::Put</code> / <code>MSet</code><br><code>|_ ShmCreateable / IsUrmaEnabled</code></td>
+<td>—</td>
+<td>SHM 路径 fd</td>
+<td><strong><code>RETURN</code></strong></td>
+<td>无</td>
+<td><code>K_INVALID</code></td>
+</tr>
+<tr>
+<td>单对象 UB 发送（可选）</td>
+<td><strong>client1</strong></td>
+<td><code>SendBufferViaUb</code><br><code>|_ UrmaWritePayload</code>（可向 worker1 方向 UB）</td>
+<td><code>UrmaWritePayload</code> 失败</td>
+<td><code>memcpy</code> 入池</td>
+<td><strong><code>RETURN</code> <code>K_INVALID</code></strong>，可改走非 UB</td>
+<td>无</td>
+<td><code>Failed to send buffer via UB</code></td>
+</tr>
+<tr>
+<td>Publish 控制面 + payload</td>
+<td><strong>client1→worker1</strong></td>
+<td><code>ClientWorkerRemoteApi::Publish</code><br><code>|_ RetryOnError</code><br><code>|_ stub_-&gt;Publish</code><br><code>worker1</code><br><code>|_ Worker Publish 链</code></td>
+<td>UB 已发则 RPC 偏元数据</td>
+<td>payload 随 RPC</td>
+<td><strong>传输重试</strong>；<strong><code>K_OC_ALREADY_SEALED</code> 重试当成功</strong></td>
+<td><strong>是</strong> <code>RETRY_ERROR_CODE</code></td>
+<td><code>Send Publish request error</code></td>
+</tr>
+<tr>
+<td>MultiPublish</td>
+<td><strong>client1→worker1</strong></td>
+<td><code>ClientWorkerRemoteApi::MultiPublish</code><br><code>|_ RetryOnError</code>（含 <strong><code>K_SCALING</code>/<code>K_OUT_OF_MEMORY</code></strong>）<br><code>|_ stub_-&gt;MultiPublish</code></td>
+<td>同上单对象放大</td>
+<td>大块内存</td>
+<td>同上</td>
+<td><strong>是</strong>（码集 ⊃ Publish）</td>
+<td><code>32</code>/<code>6</code>/<code>1002</code></td>
+</tr>
+<tr>
+<td>worker1 元数据与下推</td>
+<td><strong>worker1</strong><br><strong>worker1→worker2</strong></td>
+<td><code>worker_oc_service_multi_publish_impl</code> 等<br><code>|_ Master / 元数据提交</code><br><code>worker2</code></td>
+<td>—</td>
+<td>—</td>
+<td>RPC / <code>last_rc</code></td>
+<td>Worker 策略</td>
+<td><code>scaling</code>；master fail 文案</td>
+</tr>
+<tr>
+<td>worker1→worker3 数据面 UB</td>
+<td><strong>worker1→worker3</strong><br><strong>worker3</strong></td>
+<td><code>UrmaWritePayload</code> 等（写路径对称读）<br><code>worker3</code><br><code>|_ 接收 / 落盘 / 缓存</code></td>
+<td><strong>主战场</strong></td>
+<td>磁盘等</td>
+<td>经 <strong>worker1</strong> 汇总回 <strong>client1</strong></td>
+<td>视实现</td>
+<td>与读类似 URMA 日志</td>
+</tr>
+</tbody>
+</table>
+<hr>
+<h2 id="4-%E8%B7%A8%E6%A8%A1%E5%9D%97%E8%A6%81%E7%82%B9%E9%80%9F%E8%AE%B0%E6%8E%92%E9%9A%9C">4. 跨模块要点速记（排障）</h2>
+<ol>
+<li><strong>Init UB 握手</strong>：<code>LOG_IF_ERROR</code> → <strong>Init 可不失败</strong>，仅 ERROR 日志 + 退 TCP。</li>
+<li><strong>读 <code>PrepareUrmaBuffer</code></strong>：WARNING 降级，<strong>无</strong> URMA 码上抛。</li>
+<li><strong>读 <code>FillUrmaBuffer</code></strong>：stub 成功后仍可能 <strong><code>RETURN</code> 失败</strong>。</li>
+<li><strong><code>RetryOnError</code></strong>：不在集合内的码 <strong>不重试</strong>。</li>
+<li><strong>Get + <code>last_rc</code></strong>：<code>IsRpcTimeoutOrTryAgain</code> 或 <strong>OOM 且全 key 失败</strong> → 触发客户端重试。</li>
+</ol>
+<hr>
+<h2 id="5-%E9%85%8D%E5%A5%97%E4%B8%8E%E4%BF%AE%E8%AE%A2">5. 配套与修订</h2>
+<table>
+<thead>
+<tr>
+<th>文档</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="./kv-client-Sheet2-URMA-C%E6%8E%A5%E5%8F%A3%E6%98%A0%E5%B0%84.md">kv-client-Sheet2-URMA-C接口映射.md</a></td>
+<td>URMA C API 映射</td>
+</tr>
+<tr>
+<td><a href="../kv-client-SDK%E4%B8%8EWorker-%E8%AF%BB%E8%B7%AF%E5%BE%84-%E5%BF%AB%E9%80%9F%E5%AE%9A%E4%BD%8D%E5%AE%9A%E7%95%8C.md">kv-client-SDK与Worker-读路径-快速定位定界.md</a></td>
+<td>分诊与 W_entry/W_remote</td>
+</tr>
+<tr>
+<td><a href="./kv-client-%E8%B0%83%E7%94%A8%E9%93%BE%E8%A1%8C%E6%A8%A1%E6%9D%BF-%E7%A4%BA%E4%BE%8B-MGet%E6%9C%80%E9%95%BF%E8%B7%AF%E5%BE%84.md">kv-client-调用链行模板-示例-MGet最长路径.md</a></td>
+<td>与 1～5 段 backbone 对齐</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>日期</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2026-04-09</td>
+<td>初版</td>
+</tr>
+<tr>
+<td>2026-04-09</td>
+<td>增加 §0 约定；<strong>发生位置</strong>列；调用链 <code>|_</code> 树；读/写拆 worker1→worker2/worker3</td>
+</tr>
+</tbody>
+</table>
+
+</body>
+</html>

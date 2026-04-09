@@ -6,6 +6,7 @@
 - `docs/observable/sdk-init-定位定界.md`
 - `docs/observable/kv-client-写接口-定位定界.md`
 - `docs/observable/kv-场景-故障分类与责任边界.md`
+- **[kv-client-SDK与Worker-读路径-快速定位定界.md](./kv-client-SDK与Worker-读路径-快速定位定界.md)**：一页式 **OS / URMA / 系统** 分诊，**SDK 与 Worker** 双视角，**段①～⑥、模块、W_entry/W_remote**
 
 ---
 
@@ -138,7 +139,7 @@ L3（数据系统）优先模块：
 
 ## 7.1 典型信号
 - SDK 侧：
-  - `K_URMA_NEED_CONNECT` / `K_URMA_ERROR` / `K_URMA_TRY_AGAIN`（若上抛）
+  - `K_URMA_NEED_CONNECT` / `K_URMA_ERROR`（若上抛）；一般重试仍可能为 `K_TRY_AGAIN`(19)
   - 或出现降级日志：`UB Get buffer allocation failed ... fallback to TCP/IP payload`
 - Worker 侧（远端拉取）：
   - `Get from remote failed: ...`

@@ -1,0 +1,99 @@
+@startuml kv_client_triage_read_step
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+skinparam sequenceMessageAlign center
+
+title KV Client 定位定界（步骤2: 读路径 Get/MGet）
+
+actor "测试/开发/Agent" as T
+participant "client1\nSDK" as C
+participant "worker1\n入口Worker" as W1
+participant "worker2\n元数据" as W2
+participant "worker3\n数据副本" as W3
+participant "OS/syscall" as OS
+participant "URMA" as U
+
+T -> C : 发起 Get/MGet
+activate C
+
+C -> C : PreGet 参数校验
+alt 参数非法
+  note right of C
+    责任团队: 接口调用方/业务方
+    现象: K_INVALID
+    建议: 核对key数量/timeout/offset
+  end note
+  C --> T : 失败(K_INVALID)
+  deactivate C
+  return
+end
+
+C -> U : PrepareUrmaBuffer
+alt UB准备失败
+  note right of U
+    责任团队: RDMA/URMA团队(性能归因)
+    现象: fallback to TCP/IP payload
+    建议: 功能可继续，性能退化优先查UB池
+  end note
+  C -> C : 降级TCP继续
+end
+
+C -> W1 : stub_->Get + RetryOnError
+activate W1
+alt 1001/1002/19 重试耗尽
+  note right of W1
+    责任团队: RPC/网络中间件团队(优先)
+    建议: 无worker入口日志=>网络;
+          有入口日志=>worker或下游慢
+  end note
+  W1 --> C : 返回RPC错误
+  deactivate W1
+  C --> T : 失败(RPC)
+  deactivate C
+  return
+end
+
+W1 -> W2 : QueryMeta
+activate W2
+alt etcd/master异常
+  note right of W2
+    责任团队: 元数据/控制面团队
+    现象: etcd unavailable / Query from master failed
+  end note
+end
+W2 --> W1 : 元数据结果
+deactivate W2
+
+W1 -> W3 : 远端拉取对象
+activate W3
+W3 -> U : urma_write/urma_read + poll/wait_jfc
+alt URMA完成队列或读写失败
+  note right of U
+    责任团队: RDMA/URMA团队
+    现象: 1004 / K_RUNTIME_ERROR / 1006
+    建议: 查设备、CQ、连接稳定性
+  end note
+end
+W3 --> W1 : 远端结果/last_rc
+deactivate W3
+
+W1 --> C : rpc get response
+deactivate W1
+
+C -> OS : mmap + payload组装
+alt mmap失败或payload越界
+  note right of OS
+    责任团队: OS团队(映射) 或 数据面协议团队(越界)
+    现象: Get mmap entry failed / UB payload overflow
+    建议: 区分同机SHM问题还是返回payload不一致
+  end note
+  C --> T : 失败(5/6等)
+  deactivate C
+  return
+end
+
+C --> T : 成功/部分成功
+deactivate C
+
+@enduml
