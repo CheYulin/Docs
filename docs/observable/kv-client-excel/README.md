@@ -13,6 +13,7 @@
 | [kv-client-上下游语义要求-URMA与TCP.md](./kv-client-上下游语义要求-URMA与TCP.md) | 上游调用与下游 UB/TCP 的语义约束与建议 |
 | [kv-client-调用链行模板-示例-MGet最长路径.md](./kv-client-调用链行模板-示例-MGet最长路径.md) | **Excel 第二列写法**：MGet 最长路径 1～5 段（client→W1→…→URMA）+ 配套列建议 |
 | [kv-client-URMA-OS-读写初始化-跨模块错误与重试.md](./kv-client-URMA-OS-读写初始化-跨模块错误与重试.md) | **Init/读/写**：URMA 与 OS、跨模块传播、`Status`/`last_rc`/仅日志、**RetryOnError** 与触发码 |
+| [kv-client-URMA-错误枚举与日志-代码证据.md](./kv-client-URMA-错误枚举与日志-代码证据.md) | URMA 专项：UMDK 枚举值（`urma_status_t`）+ 数据系统实际 error 日志与处理路径（代码证据） |
 | [kv-client-定位定界手册-基于Excel.md](./kv-client-定位定界手册-基于Excel.md) | 精简手册：如何结合 3 个 Sheet 快速定界，并给出日志自动化分析建议 |
 | [kv-client-定位定界-总图.puml](./kv-client-定位定界-总图.puml) | 测试/开发/Agent 共用定位流程图：按状态码/日志分支到 URMA、OS、RPC、系统逻辑、用户参数，并给出下钻 Sheet 建议 |
 | [kv-client-定位定界-步骤1-Init.puml](./kv-client-定位定界-步骤1-Init.puml) | 分步骤图（Init）：调用链 + 错误分支 + 责任团队 |
