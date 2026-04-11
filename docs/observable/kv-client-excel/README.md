@@ -15,10 +15,10 @@
 | [kv-client-URMA-OS-读写初始化-跨模块错误与重试.md](./kv-client-URMA-OS-读写初始化-跨模块错误与重试.md) | **Init/读/写**：URMA 与 OS、跨模块传播、`Status`/`last_rc`/仅日志、**RetryOnError** 与触发码 |
 | [kv-client-URMA-错误枚举与日志-代码证据.md](./kv-client-URMA-错误枚举与日志-代码证据.md) | URMA 专项：UMDK 枚举值（`urma_status_t`）+ 数据系统实际 error 日志与处理路径（代码证据） |
 | [kv-client-定位定界手册-基于Excel.md](./kv-client-定位定界手册-基于Excel.md) | 精简手册：如何结合 3 个 Sheet 快速定界，并给出日志自动化分析建议 |
-| [kv-client-定位定界-总图.puml](./kv-client-定位定界-总图.puml) | 测试/开发/Agent 共用定位流程图：按状态码/日志分支到 URMA、OS、RPC、系统逻辑、用户参数，并给出下钻 Sheet 建议 |
-| [kv-client-定位定界-步骤1-Init.puml](./kv-client-定位定界-步骤1-Init.puml) | 分步骤图（Init）：调用链 + 错误分支 + 责任团队 |
-| [kv-client-定位定界-步骤2-读路径Get_MGet.puml](./kv-client-定位定界-步骤2-读路径Get_MGet.puml) | 分步骤图（读）：Get/MGet 调用链 + 错误分支 + 责任团队 |
-| [kv-client-定位定界-步骤3-写路径Put_MSet.puml](./kv-client-定位定界-步骤3-写路径Put_MSet.puml) | 分步骤图（写）：Put/MSet 调用链 + 错误分支 + 责任团队 |
+| [kv-client-定位定界-总图.puml](./puml/kv-client-定位定界-总图.puml) | 测试/开发/Agent 共用定位流程图：按状态码/日志分支到 URMA、OS、RPC、系统逻辑、用户参数，并给出下钻 Sheet 建议 |
+| [kv-client-定位定界-步骤1-Init.puml](./puml/kv-client-定位定界-步骤1-Init.puml) | 分步骤图（Init）：调用链 + 错误分支 + 责任团队 |
+| [kv-client-定位定界-步骤2-读路径Get_MGet.puml](./puml/kv-client-定位定界-步骤2-读路径Get_MGet.puml) | 分步骤图（读）：Get/MGet 调用链 + 错误分支 + 责任团队 |
+| [kv-client-定位定界-步骤3-写路径Put_MSet.puml](./puml/kv-client-定位定界-步骤3-写路径Put_MSet.puml) | 分步骤图（写）：Put/MSet 调用链 + 错误分支 + 责任团队 |
 | [kv-client-性能关键路径与采集手册.md](./kv-client-性能关键路径与采集手册.md) | 性能专题：线程切换、RPC等待、URMA降级影响、采集命令与 ST 验证建议 |
 | [../kv-client-Get路径-树状错误矩阵.md](../kv-client-Get路径-树状错误矩阵.md) | **Get/MGet 专用**：路径为列、阶段为行的树状错误矩阵（内部 / OS / URMA / RPC） |
 | [../kv-client-SDK与Worker-读路径-快速定位定界.md](../kv-client-SDK与Worker-读路径-快速定位定界.md) | **读路径工单级**：快速区分 OS/URMA/系统，定段①～⑥、模块、入口/远端 Worker |

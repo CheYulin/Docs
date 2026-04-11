@@ -2,6 +2,12 @@
 
 本目录说明：**何时改 `yuanrong-datasystem`，何时用 `vibe-coding-files` 的脚本与文档**，避免在错误仓库里找工具或重复造轮子。
 
+## 0. Agent 角色（Open Yuanrong DataSystem）
+
+在本载体仓库与配对 datasystem 上工作时，宜同时具备：**架构合理性**（边界与依赖）、**设计与语义细节**（接口与观测）、**Code Review**、**用户易用性**、**测试与性能验证**。根目录 [`README.md`](../../README.md) 有对照表；重复流程建议做成 **Cursor Skill**（见 [`.cursor/skills/feature-tree-to-docs/SKILL.md`](../../.cursor/skills/feature-tree-to-docs/SKILL.md)）。
+
+**Excel**：可复现表格优先用脚本生成，见 [`docs/observable/kv-client-excel/README.md`](../observable/kv-client-excel/README.md)；新脚本放 [`scripts/`](../../scripts/README.md)。**PPT**：见 [`docs/observable/ppt.md`](../observable/ppt.md) 与 `docs/observable/定位定界-ppt素材-*.md`。
+
 ## 1. 仓库分工（必读）
 
 - **`yuanrong-datasystem`**：C/C++ 等**产品源码**、`build.sh`、与 CMake 强耦合的 `scripts/build_thirdparty.sh` 等。  

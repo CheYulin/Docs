@@ -12,6 +12,7 @@
 | [**用户手册.md**](用户手册.md) | **端到端上手**：环境要求、pip/源码、`build.sh`、测试、`dscli`/ETCD/进程与 K8s 摘要；细节链官方入门 |
 | [results/](../results/) | **本地验证输出目录**（命令与 `tee` 日志；除 `README.md` 外不入库，见该目录说明） |
 | [feature-tree/](feature-tree/) | **特性树**：[openYuanrong Data System 特性树（Agent）](feature-tree/openyuanrong-data-system-feature-tree.md)；官方案例索引见该目录 |
+| [observable/](observable/) | 定位定界总纲与专题；**Excel**：[kv-client-excel/](observable/kv-client-excel/README.md)；**PPT 素材**：[ppt.md](observable/ppt.md)、`定位定界-ppt素材-*.md` |
 
 仓库根下另有 **[`tech-research/`](../tech-research/README.md)**（第三方与库的技术调研）与 **[`workspace/`](../workspace/README.md)**（bpftrace/perf/strace 等**可复现产物**，默认输出目录）。
 

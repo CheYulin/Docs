@@ -11,6 +11,7 @@
 | **`scripts/perf/`** | 性能与 I/O 可观测性（含 bpftrace，常需 root） | 对比 executor 开销、锁竞争 batch、栈/系统调用证据 |
 | **`scripts/verify/`** | 特性门禁与回归（CTest 封装） | 合入前跑 KV executor / brpc 参考用例 |
 | **`scripts/lib/`** | 解析 `DATASYSTEM_ROOT` 与本仓根 | 被其它脚本 `source` / Python `import`，一般不单独跑 |
+| **`scripts/git/`** | 根据当前 diff **生成 commit message 草稿**（路径启发，无 LLM） | 合入前在本仓根执行 `scripts/git/generate_commit_message.sh`；`--copy` 写入剪贴板 |
 
 ## 2. 按任务选脚本
 
