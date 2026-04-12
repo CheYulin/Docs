@@ -24,8 +24,8 @@
 
 ## Excel 与 PPT
 
-- **Excel**：定位定界手册、观测矩阵、特性树等以表格交付时，优先用 **脚本生成 `.xlsx`**（可维护、可复现）。现有示例：[`docs/observable/kv-client-excel/README.md`](docs/observable/kv-client-excel/README.md)（含生成脚本）、[`workspace/reliability/scripts/build_openyuanrong_fault_library_xlsx.py`](workspace/reliability/scripts/build_openyuanrong_fault_library_xlsx.py)。**新增表格生成器建议落在 `scripts/` 子目录**（例如 `scripts/excel/`），并在文档中写明输入输出与依赖（如 `openpyxl`）。  
-- **PPT**：本仓以 **Markdown 素材 + 结构提纲** 为主，便于人工或工具导入幻灯片；示例：[`docs/observable/ppt.md`](docs/observable/ppt.md)、[`docs/observable/定位定界-ppt素材-团队视角版.md`](docs/observable/定位定界-ppt素材-团队视角版.md)、[`docs/observable/定位定界-ppt素材-证据版.md`](docs/observable/定位定界-ppt素材-证据版.md)。需要自动化时可再在 `scripts/` 增加导出步骤（如 pandoc / python-pptx），并在 `docs/agent` 中登记。
+- **Excel**：定位定界手册、观测矩阵、特性树等以表格交付时，优先用 **脚本生成 `.xlsx`**（可维护、可复现）。现有示例：[`docs/observable/kv-client/README.md`](docs/observable/kv-client/README.md) 与 [`docs/observable/workbook/kv-client/README.md`](docs/observable/workbook/kv-client/README.md)（含生成脚本）、[`workspace/reliability/scripts/build_openyuanrong_fault_library_xlsx.py`](workspace/reliability/scripts/build_openyuanrong_fault_library_xlsx.py)。**新增表格生成器建议落在 `scripts/` 子目录**（例如 `scripts/excel/`），并在文档中写明输入输出与依赖（如 `openpyxl`）。  
+- **PPT**：本仓以 **Markdown 素材 + 结构提纲** 为主，当前历史材料已归档到 [`docs/observable/archive/`](docs/observable/archive/README.md)。需要自动化时可再在 `scripts/` 增加导出步骤（如 pandoc / python-pptx），并在 `docs/agent` 中登记。
 
 ## 快速开始
 

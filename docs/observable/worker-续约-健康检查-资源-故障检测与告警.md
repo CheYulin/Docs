@@ -110,7 +110,7 @@
 
 ## 5. 与「Worker 故障」文档的衔接
 
-- **启动失败**：仍见 [worker-启动故障-定位定界.md](./worker-启动故障-定位定界.md)。
+- **启动失败**：仍见 [worker-启动故障-定位定界.md](./archive/worker-启动故障-定位定界.md)（历史归档）。
 - **etcd gRPC 细节**：见 [worker-etcd与二级存储-故障检测与告警.md](./worker-etcd与二级存储-故障检测与告警.md)。
 - **客户端可见错误码**：见 `kv-client-*`、`sdk-init` 系列。
 

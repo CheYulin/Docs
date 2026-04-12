@@ -1,0 +1,38 @@
+@startuml kv_client_triage_sub_os
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+skinparam dpi 150
+
+title 定位定界分图 04 — OS、fd、shm、mmap\n配合总图「第 3 步」；可与 syscall 观测表对照使用
+
+start
+
+:前提: 手册中码属 **IO/OOM/FD** 或 日志含\nmmap / recvmsg / sendmsg /\ninvalid fd / EOF / shm;
+
+if (Init 或传 fd 路径\n出现 invalid fd / EOF?) then (是)
+  :责任域: **UDS 传 fd 时序 / ulimit / 对端进程**;
+  :动作: 查 fd 上限、同机映射、Worker 是否重启;
+  stop
+endif
+
+if (Get/组装阶段\nmmap / payload overflow?) then (是)
+  :责任域: **OS 映射** 或 **协议返回与元数据不一致**;
+  :动作: 区分 SHM 失败 vs 越界;\n**定界-case** 中 mmap/IO 条目 + **syscall 个案** 工作表;
+  stop
+endif
+
+if (K_OUT_OF_MEMORY(6) / K_NO_SPACE(13) /\nK_FILE_LIMIT_REACHED(18)?) then (是)
+  :责任域: **节点/容器资源**;
+  :动作: cgroup、磁盘、vm.max_map_count、并发;
+  stop
+endif
+
+:其它 OS 线索:\n在 **syscall 个案** 工作表中逐条对照（表名以工作簿为准）;
+stop
+
+note right
+  写路径清理阶段 close/munmap 异常\n也可落入本图（多为尾部）
+end note
+
+@enduml

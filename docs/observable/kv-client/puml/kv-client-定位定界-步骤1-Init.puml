@@ -1,0 +1,80 @@
+@startuml kv_client_triage_init_step
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+skinparam sequenceMessageAlign center
+
+title KV Client 定位定界（步骤1: Init）\nInit 建连：RPC + UDS 传 fd + URMA/UB + mmap；可与「可见 StatusCode 说明」对照
+
+actor "测试/开发/Agent" as T
+participant "client1\nSDK" as C
+participant "worker1\n入口Worker" as W1
+participant "OS/syscall" as OS
+participant "URMA" as U
+
+T -> C : 发起 Init
+activate C
+
+C -> C : 参数校验(host/port/凭证)
+alt 参数非法
+  note right of C
+    责任团队: 接口调用方/业务方
+    现象: K_INVALID(2)
+    建议: 先修参数再复测
+  end note
+  C --> T : Init失败 K_INVALID(2)
+  deactivate C
+  return
+end
+
+C -> W1 : RegisterClient (RPC)
+activate W1
+alt 连接失败/超时
+  note right of W1
+    责任团队: RPC/网络中间件团队
+    现象: 1001(K_RPC_DEADLINE_EXCEEDED)/1002(K_RPC_UNAVAILABLE), Register client failed
+    建议: 查监听端口/路由/防火墙
+  end note
+  W1 --> C : Status=1001(K_RPC_DEADLINE_EXCEEDED) 或 1002(K_RPC_UNAVAILABLE)
+  deactivate W1
+  C --> T : Init失败(RPC)
+  deactivate C
+  return
+end
+
+C -> OS : recvmsg/sendmsg (UDS传fd)
+alt fd异常/EOF/invalid fd
+  note right of OS
+    责任团队: OS/运行环境团队
+    现象: invalid fd / Unexpected EOF
+    建议: 查fd上限、UDS时序、对端进程状态
+  end note
+end
+
+C -> U : urma_init + create_* + import/advise_jfr
+alt URMA初始化或握手失败
+  note right of U
+    责任团队: RDMA/URMA团队
+    现象: 1004(K_URMA_ERROR) / Failed to urma...
+    建议: 查UMDK/设备名/bonding/驱动
+  end note
+  C -> C : 记录错误，可回退TCP
+else URMA成功
+  C -> C : 进入UB可用状态
+end
+
+C -> OS : mmap (UB pool)
+alt 内存映射失败
+  note right of OS
+    责任团队: OS/容量团队
+    现象: K_OUT_OF_MEMORY(6)
+    建议: 查内存限制与vm.max_map_count
+  end note
+end
+
+W1 --> C : Init完成
+deactivate W1
+C --> T : Init成功(可能UB降级)
+deactivate C
+
+@enduml

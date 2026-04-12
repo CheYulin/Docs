@@ -1,0 +1,40 @@
+@startuml kv_client_triage_sub_urma
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+skinparam dpi 150
+
+title 定位定界分图 02 — URMA / UB 连接与数据面\n配合总图「第 3 步：日志关键词分诊」；不依赖仓库内文件路径
+
+start
+
+:前提: 已对照 **StatusCode 书面说明**;\n同 Trace 日志出现 URMA 相关 或 码为\n1004(K_URMA_ERROR) / 1006(K_URMA_NEED_CONNECT) /\n1008(K_URMA_TRY_AGAIN) / （部分场景 5(K_RUNTIME_ERROR)）;
+
+if (status == 1006(K_URMA_NEED_CONNECT)\n或日志 need reconnect / 连接状态?) then (是)
+  :责任域: **URMA 连通性 / 状态机**;
+  :动作: 重建 UB 会话、核对 bonding/设备名;\n查 **观测 Excel**：**定界-case** 中 URMA 连通性条目 +\n**自检/对照清单** 表中 CheckUrmaConnectionStable 等项;
+  stop
+endif
+
+if (日志含 poll / wait / jfc /\nFailed to urma_… / CQ?) then (是)
+  :责任域: **URMA 数据面 / UMDK / 设备**;
+  :动作: 按具体 urma_ 前缀 API 查厂商手册;\n**同 TraceID** 拉全 URMA 行;\n**定界-case** 中数据面条目 + **自检清单** 表;
+  stop
+endif
+
+if (日志含 fallback / TCP/IP payload\n且功能仍成功?) then (是)
+  :责任域: **UB 降级为 TCP**（多为性能路径）;
+  :动作: 功能问题可排除 UB 必选路径;\n性能问题查 UB 池与连接;
+  stop
+endif
+
+:回退总图:\n用码表确认是否应归入 RPC/OS;
+stop
+
+note right
+  深度对照（随交付文档包，无固定路径）
+  • URMA 错误枚举与日志的代码证据说明
+  • URMA C 接口与观测列映射表
+end note
+
+@enduml

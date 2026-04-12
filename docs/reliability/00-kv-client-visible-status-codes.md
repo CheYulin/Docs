@@ -7,7 +7,7 @@
 - 枚举：`include/datasystem/utils/status.h` → `enum StatusCode`
 - 默认英文文案：`src/datasystem/common/util/status_code.def`（`STATUS_CODE_DEF`；**未在 .def 中出现的码**仅有枚举名，消息以运行时 `Status` 为准）
 
-源码级证据链（重试、RPC 映射等）：[client-status-codes-evidence-chain.md](client-status-codes-evidence-chain.md)。
+源码级证据链（重试、RPC 映射等）：[deep-dives/client-status-codes-evidence-chain.md](deep-dives/client-status-codes-evidence-chain.md)。
 
 FEMA 业务场景与基础设施故障清单：[00-kv-client-fema-scenarios-failure-modes.md](00-kv-client-fema-scenarios-failure-modes.md)。**本文不替代**该表，而是补上 **「现象 ↔ 数字码」** 这一层。
 

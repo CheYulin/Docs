@@ -28,7 +28,7 @@
 - **基线**：`perf/collect_client_lock_baseline.sh`、`perf/compare_client_lock_baseline.sh`  
 - **bpftrace / strace / perf**：`perf/run_kv_lock_ebpf_workflow.sh`、`perf/trace_kv_lock_io_bpftrace.sh`、`perf/trace_kv_lock_io.sh`、`perf/perf_record_kv_lock_io.sh`、`perf/analyze_*.py`、`perf/bpftrace/`  
 - **索引**：`index/refresh_urma_index_db.py`  
-- **构建辅助**：`build/list_client_third_party_deps.sh`、`build/bootstrap_brpc_st_compat.sh`  
+- **构建辅助**：`build/list_client_third_party_deps.sh`、`build/bootstrap_brpc_st_compat.sh`、`build/remote_build_run_datasystem.sh`（本地 rsync 到远端后执行构建/CTest/验证/example，默认读取 `build/remote_build_run_datasystem.rsyncignore` 跳过构建产物）  
 - **提交说明草稿**：`git/generate_commit_message.sh`（默认已暂存或未暂存工作区；`--all` 相对 HEAD；`-c` 复制到剪贴板；`-o FILE` 写入文件）  
 - **KV SDK FEMA + observable 联动 Excel**：`excel/build_kv_sdk_fema_workbook.py`（输入 `workspace/reliability/kv_sdk_fema_rows.tsv`，输出 `workspace/reliability/kv_sdk_fema_analysis.xlsx`）
 

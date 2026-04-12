@@ -183,7 +183,7 @@ Status ObjectClientImpl::MmapShmUnit(...)
 
 ## 4. 与旧 Excel 材料的关系
 
-- 粗粒度 **Init/MCreate/MSet/MGet** 见：[kv-client-excel/kv-client-Sheet1-调用链-错误与日志.md](./kv-client-excel/kv-client-Sheet1-调用链-错误与日志.md)。  
+- 粗粒度 **Init/MCreate/MSet/MGet** 见：[workbook/kv-client/kv-client-Sheet1-调用链-错误与日志.md](./workbook/kv-client/kv-client-Sheet1-调用链-错误与日志.md)。  
 - 本文 **专精 Get**，覆盖 **分支级错误来源**，可作为 **Sheet1 的 Get 展开附件**。
 
 ---

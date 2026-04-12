@@ -1,6 +1,6 @@
 # KV Client FEMA：时间指标与单点故障影响（粗算）
 
-> 入口：[00-kv-client-fema-index.md](00-kv-client-fema-index.md)。短超时与 UB 感知量级差异的专项分析：[`get-latency-timeout-sensitive-analysis-5ms-20ms.md`](get-latency-timeout-sensitive-analysis-5ms-20ms.md)。
+> 入口：[00-kv-client-fema-index.md](00-kv-client-fema-index.md)。短超时与 UB 感知量级差异的专项分析：[`deep-dives/get-latency-timeout-sensitive-analysis-5ms-20ms.md`](deep-dives/get-latency-timeout-sensitive-analysis-5ms-20ms.md)。
 
 本节把可靠性表中出现的 **时间量级** 与 **客户可观测影响** 对齐，并给出单点故障下失败占比的 **工程粗算公式**（用于容量、告警与沟通口径；非严格排队论模型）。
 

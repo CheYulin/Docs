@@ -5,7 +5,7 @@
 **分析对象只有两个**：**SDK（客户端进程）** 与 **Worker（服务端进程）**。第三方（etcd、Master、网络设备）通过 Worker 日志与返回码间接判定。
 
 配套（细节与代码证据）：
-- [kv-client-读接口-定位定界.md](./kv-client-读接口-定位定界.md)
+- [kv-client-读接口-定位定界.md](./archive/kv-client-读接口-定位定界.md)（历史归档）
 - [kv-client-Get路径-树状错误矩阵.md](./kv-client-Get路径-树状错误矩阵.md)
 - `docs/flows/sequences/kv-client/kv_client_read_path_normal_sequence.puml`（①～⑥ 分段）
 

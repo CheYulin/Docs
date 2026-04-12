@@ -6,7 +6,7 @@
 
 在本载体仓库与配对 datasystem 上工作时，宜同时具备：**架构合理性**（边界与依赖）、**设计与语义细节**（接口与观测）、**Code Review**、**用户易用性**、**测试与性能验证**。根目录 [`README.md`](../../README.md) 有对照表；重复流程建议做成 **Cursor Skill**（见 [`.cursor/skills/feature-tree-to-docs/SKILL.md`](../../.cursor/skills/feature-tree-to-docs/SKILL.md)）。
 
-**Excel**：可复现表格优先用脚本生成，见 [`docs/observable/kv-client-excel/README.md`](../observable/kv-client-excel/README.md)；新脚本放 [`scripts/`](../../scripts/README.md)。**PPT**：见 [`docs/observable/ppt.md`](../observable/ppt.md) 与 `docs/observable/定位定界-ppt素材-*.md`。
+**Excel**：可复现表格优先用脚本生成，见 [`docs/observable/kv-client/README.md`](../observable/kv-client/README.md) 与 [`docs/observable/workbook/kv-client/README.md`](../observable/workbook/kv-client/README.md)；新脚本放 [`scripts/`](../../scripts/README.md)。**PPT**：历史材料见 [`docs/observable/archive/README.md`](../observable/archive/README.md)。
 
 ## 1. 仓库分工（必读）
 
@@ -18,8 +18,8 @@
 ## 2. 执行任务前的检查清单
 
 1. **定位 datasystem 根**：若脚本找不到仓库，设置 `export DATASYSTEM_ROOT=/绝对路径/yuanrong-datasystem`。  
-2. **ST 测试**：用 **`ctest --test-dir <build>`** 或本仓库 **`scripts/verify/validate_kv_executor.sh`**，不要直接执行 `ds_st_kv_cache` 二进制（缺 `LD_LIBRARY_PATH` 会失败）。  
-3. **已编过 ST、避免长耗时重编**：`scripts/verify/validate_kv_executor.sh --skip-build <build>`。  
+2. **ST 测试**：用 **`ctest --test-dir <build>`** 或本仓库 **`./ops test.kv_executor`**，不要直接执行 `ds_st_kv_cache` 二进制（缺 `LD_LIBRARY_PATH` 会失败）。  
+3. **已编过 ST、避免长耗时重编**：`./ops test.kv_executor --skip-build <build>`。  
 4. **需要人类读的长文档**：优先写进 `docs/` 或 `plans/`，不要在对话里只留碎片命令。
 
 ## 3. 文档地图

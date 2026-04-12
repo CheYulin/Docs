@@ -1,0 +1,52 @@
+@startuml kv_client_triage_sub_business
+skinparam shadowing false
+skinparam roundcorner 8
+skinparam defaultFontName "SansSerif"
+skinparam dpi 150
+
+title 定位定界分图 05 — 参数、业务语义与控制面\n配合总图「第 3 步」；时序下钻见同套「读/写路径」图
+
+start
+
+:前提: 书面说明中码属 **参数/语义/控制面**;\n或 错误码为 2(K_INVALID) / 3(K_NOT_FOUND) /\n14(K_NOT_LEADER_MASTER) / 25(K_MASTER_TIMEOUT) /\n26(K_NOT_FOUND_IN_L2CACHE) / 30~32(K_RETRY_IF_LEAVING/K_SCALE_DOWN/K_SCALING) /\n2000(K_OC_ALREADY_SEALED)~2004(K_OC_KEY_ALREADY_EXIST) 等;
+
+if (K_INVALID(2)?) then (是)
+  :责任域: **调用方参数 / 接口约束**;
+  :动作: key、batch、offset、size、timeout、ttl;\n查接口文档与 **定界-case** 中参数类条目;
+  stop
+endif
+
+if (K_NOT_FOUND(3)\n或 MGet 部分 Optional 空?) then (是)
+  :责任域: **业务数据是否存在 / TTL**;
+  :动作: 确认写入成功与生命周期;\n不以「部分未命中」误判为 RPC 全失败;
+  stop
+endif
+
+if (日志含 etcd / master /\nQuery.*failed / 25(K_MASTER_TIMEOUT) / 14(K_NOT_LEADER_MASTER)?) then (是)
+  :责任域: **控制面 / 对象目录(Directory)**;\n注: 文档称 Directory；日志 grep 仍可有 **master** 原文;
+  :动作: etcd 租约与路由、Directory 分片(hash ring)可用、网络;\n对照 **故障树/FMEA** 中 etcd、Directory 相关小节;
+  stop
+endif
+
+if (K_SCALING(32) / K_RETRY_IF_LEAVING(30) /\n扩缩容窗口?) then (是)
+  :责任域: **集群调度 / 运维事件**;
+  :动作: 退避重试、等待迁移完成;\n与变更单对齐时间线;
+  stop
+endif
+
+if (K_OC_ALREADY_SEALED(2000) /\nK_OC_KEY_ALREADY_EXIST(2004) /\nfailed_object_keys?) then (是)
+  :责任域: **对象状态 / 并发写语义**;
+  :动作: 勿重复 Publish；NX 策略；\n逐 key 看重试;
+  stop
+endif
+
+:其它逻辑关键词:\nGet from remote failed / UB payload overflow（语义层）;\n**定界-case** 其余业务语义条目 + **调用链拆段** 表;
+stop
+
+note right
+  时序级下钻（同套 PlantUML 素材，与文件名无关）
+  • 读路径 Get/MGet 时序图
+  • 写路径 Put/MSet 时序图
+end note
+
+@enduml

@@ -4,10 +4,10 @@
 
 **配套**：
 
-- SDK Init 详版：[sdk-init-定位定界.md](./sdk-init-定位定界.md)
-- Worker 启动故障详版：[worker-启动故障-定位定界.md](./worker-启动故障-定位定界.md)
+- SDK Init 详版：[sdk-init-定位定界.md](./archive/sdk-init-定位定界.md)（历史归档）
+- Worker 启动故障详版：[worker-启动故障-定位定界.md](./archive/worker-启动故障-定位定界.md)（历史归档）
 - 序列图目录：[docs/flows/sequences/kv-client/README.md](../flows/sequences/kv-client/README.md)
-- KV Client 调用链 × URMA/TCP（Excel + Markdown 证据包）：[kv-client-excel/README.md](./kv-client-excel/README.md)
+- KV Client 调用链 × URMA/TCP（文档 + 工作簿证据包）：[kv-client/README.md](./kv-client/README.md)
 
 **深度展开**（本文 **§9～§12**）：TCP(ZMQ) 与 UB(URMA) 的 **错误码 → 日志 → 源码位置**，以及 **总体 + 分场景排查树**（Mermaid）；无法渲染 Mermaid 时可直接读图中节点文字作检查清单。
 
@@ -23,7 +23,7 @@
 | **L3（数据系统）** | Worker / Master / SDK 逻辑、RPC、SHM/URMA、元数据与数据面协同 | 数据系统团队 |
 | **L3（数据系统）内子模块** | 见文末 **§8 模块索引**，用于「是数据系统问题时的细分」 | 研发内部分工 |
 
-**自证要点**：用 **同一时间线** 对齐 **客户端 `Status::ToString()` / 访问日志**、**入口 Worker 日志**、**etcd 事件**（若可拿）；避免仅凭 `K_RPC_UNAVAILABLE` 定责到单一侧（见 [sdk-init-定位定界.md §10](./sdk-init-定位定界.md)）。
+**自证要点**：用 **同一时间线** 对齐 **客户端 `Status::ToString()` / 访问日志**、**入口 Worker 日志**、**etcd 事件**（若可拿）；避免仅凭 `K_RPC_UNAVAILABLE` 定责到单一侧（见 [sdk-init-定位定界.md §10](./archive/sdk-init-定位定界.md)）。
 
 ---
 
@@ -129,7 +129,7 @@
 
 `ObjectClientImpl::Init` → `RpcAuthKeyManager` → `InitClientWorkerConnect` → `ClientWorkerRemoteCommonApi::Connect`（`GetSocketPath` / UDS 握手 / `RegisterClient`）→ `ListenWorker` → `WorkerOCService_Stub` 建链。
 
-**证据**：同 [sdk-init-定位定界.md](./sdk-init-定位定界.md) §2–§4、§8。
+**证据**：同 [sdk-init-定位定界.md](./archive/sdk-init-定位定界.md) §2–§4、§8。
 
 ---
 
@@ -471,7 +471,7 @@ flowchart TD
   S2 -->|mmap / fd| S10[sdk-init §8 FD 交换]
 ```
 
-**证据汇总**：[sdk-init-定位定界.md](./sdk-init-定位定界.md) 全文。
+**证据汇总**：[sdk-init-定位定界.md](./archive/sdk-init-定位定界.md) 全文。
 
 ### 12.2 Worker 初始化
 
