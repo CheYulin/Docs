@@ -2,130 +2,143 @@
 
 **这是什么类型的 PR？**
 
-/kind feature（可观测性增强；不修改错误码，不改对外 API）
+/kind feature（可观测性增强；不改错误码、不改对外接口）
 
 ---
 
-**这个 PR 是做什么的 / 我们为什么需要它**
+**这个 PR 做了什么 / 为什么需要**
 
-- 在 ZMQ/TCP RPC 最底层（`zmq_msg_send`/`zmq_msg_recv` 调用处）接入 `datasystem::metrics` 框架，暴露故障计数与 I/O 延迟 Histogram，实现两项可观测性能力：
-  1. **故障定界**：`zmq.send.fail` / `zmq.recv.fail` / `zmq.net_error` 等 Counter 在失败路径上计数，配合 `zmq.last_errno` Gauge 保留最近 errno，10 秒内即可从指标判定故障层（ZMQ socket 层 vs 网络层 vs 对端）。
-  2. **性能自证清白**：`zmq.io.send_us` / `zmq.io.recv_us` / `zmq.rpc.ser_us` / `zmq.rpc.deser_us` Histogram 独立量化 ZMQ I/O 与 protobuf 序列化耗时，提供公式化的"RPC 框架开销占比"计算依据。
+本 PR 在 ZMQ/TCP RPC 路径补齐“可定界 + 可自证”的 metrics 与测试能力：
+
+1. **故障定界**  
+   在 `zmq_msg_send/recv` 失败路径记录 `zmq_send_failure_total`、`zmq_receive_failure_total`、`zmq_network_error_total`、`zmq_last_error_number`，并结合连接事件指标（`zmq_gateway_recreate_total`、`zmq_event_disconnect_total`、`zmq_event_handshake_failure_total`）定位问题层次。
+
+2. **性能自证**  
+   记录 `zmq_send_io_latency`、`zmq_receive_io_latency`、`zmq_rpc_serialize_latency`、`zmq_rpc_deserialize_latency`，将 I/O 与 RPC 序列化开销拆分，支持“框架是否瓶颈”的量化判断。
+
+3. **测试可落地**  
+   新增故障注入 ST 用例与日志校验脚本，验证“故障场景下关键日志/指标确实可见”，并形成测试串讲文档。
 
 ---
 
-**此 PR 修复了哪些问题**
+**基线与分支说明**
 
-关联：ZMQ TCP/RPC Metrics 可观测定界专项。  
+- 当前变更已按要求 rebase 到 `main/master`（openeuler 主干）。
+- 按要求丢弃了旧的 metrics 框架提交（`20ce4860`），复用主干已有 metrics 框架能力。
+
+---
+
+**接口/兼容性影响**
+
+- 无对外 API 签名变化。
+- 无 `StatusCode` 枚举变化。
+- 无协议字段变化。
+- Bazel 兼容：新增/调整 ZMQ Bazel target 依赖；运行时建议使用 `USE_BAZEL_VERSION=7.4.1`。
+
+---
+
+**主要代码变更（已对齐 !586）**
+
+**新增/扩展**
+
+- `src/datasystem/common/metrics/kv_metrics.h`
+  - `KvMetricId` 新增 13 个 ZMQ 通用指标枚举（不加 CLIENT/WORKER 前缀）
+- `src/datasystem/common/metrics/kv_metrics.cpp`
+  - `InitKvMetrics()` 统一注册 KV + ZMQ 的 `MetricDesc`
+- `tests/ut/common/rpc/zmq_metrics_test.cpp`
+  - ZMQ metrics UT（20 个场景）
+- `tests/ut/common/rpc/BUILD.bazel`
+  - 注册 `zmq_metrics_test`
+- `tests/st/common/rpc/zmq/zmq_metrics_fault_test.cpp`
+  - 4 个故障注入 E2E 场景（Normal / ServerKilled / SlowServer / HighLoad）
+
+**修改**
+
+- `src/datasystem/common/rpc/zmq/zmq_socket_ref.cpp`
+  - send/recv 失败计数 + I/O histogram（计数类写法对齐 `METRIC_INC`）
+- `src/datasystem/common/rpc/zmq/zmq_common.h`
+  - serialize/deserialize histogram
+- `src/datasystem/common/rpc/zmq/zmq_socket.cpp`
+  - timeout 日志标签 `[ZMQ_RECV_TIMEOUT]`
+- `src/datasystem/common/rpc/zmq/zmq_stub_conn.cpp`
+  - gateway recreate 计数
+- `src/datasystem/common/rpc/zmq/zmq_monitor.cpp`
+  - disconnect / handshake-fail 计数
+- `src/datasystem/common/rpc/zmq/BUILD.bazel`
+  - 移除 `zmq_metrics_def` target，统一切换到 `common_metrics` 依赖
+- `tests/st/common/rpc/zmq/BUILD.bazel`
+  - 注册 `zmq_metrics_fault_test`
+- `tests/ut/common/rpc/BUILD.bazel`
+  - 移除对 `zmq_metrics_def` 的依赖
+
+**删除**
+
+- `src/datasystem/common/rpc/zmq/zmq_metrics_def.h`
+  - 独立 ZMQ 指标定义头已收敛进 `kv_metrics` 体系
+
+---
+
+**测试与脚本/文档交付**
+
+- 脚本：
+  - `vibe-coding-files/scripts/testing/verify/verify_zmq_fault_injection_logs.sh`
+  - `vibe-coding-files/scripts/testing/verify/verify_zmq_metrics_fault.sh`
+  - `vibe-coding-files/scripts/testing/verify/run_zmq_metrics_ut_regression_remote.sh`
+  - `vibe-coding-files/scripts/testing/verify/run_zmq_metrics_fault_e2e_remote.sh`
+- 文档：
+  - `.../RESULTS.md`（分阶段证据 + 复跑证据）
+  - `.../ZMQ-metrics-故障注入与日志定界-测试串讲.md`
+
+---
+
+**最新验证结果（基于当前实现）**
+
+1. **远端构建**
+   - `cmake --build . --target common_rpc_zmq -j8`
+   - 结果：`Built target common_rpc_zmq`
+
+2. **UT（主回归）**
+   - `./tests/ut/ds_ut --gtest_filter="ZmqMetricsTest.*:MetricsTest.*"`
+   - 结果：`82/82 PASSED`（`MetricsTest` 62 + `ZmqMetricsTest` 20）
+
+3. **ST（故障注入）**
+   - `./tests/st/ds_st --gtest_filter="ZmqMetricsFaultTest.*" --alsologtostderr`
+   - 结果：`4/4 PASSED`
+   - 总耗时：`6746 ms`
+   - 关键耗时：
+     - `ServerKilled_GwRecreateDetectsPeerCrash`: `3712 ms`
+     - `SlowServer_ZmqCountersZeroProvesFrameworkInnocent`: `1508 ms`
+   - 典型定界日志：`[FAULT INJECT]`、`[METRICS DUMP - ...]`、`[ISOLATION]`、`[SELF-PROOF REPORT]`
+
+4. **日志自动验收**
+   - `verify_zmq_fault_injection_logs.sh <full-log>`
+   - 结果：`Mandatory RESULT: 15 matched | 0 missing`
+
+5. **新增 ST 耗时评估（CI 影响）**
+   - 当前优化后 `ZmqMetricsFaultTest.*` 总耗时约 `6.7s`
+   - `ZmqMetricsTest.*` UT 墙钟约 `0.01s`
+
+---
+
+**关联**
+
+关联：ZMQ TCP/RPC Metrics 可观测定界专项  
 Fixes #<ISSUE_ID>
 
 ---
 
-**PR 对程序接口进行了哪些修改？**
+**建议的 PR 标题**
 
-- 无客户可见 API 签名变化。
-- 无 `StatusCode` 枚举值变化（不修改错误码）。
-- 新增内部可观测接口：
-  - `zmq_metrics_def.h`：`ZmqMetricId` 枚举（ID 100-113）、`ZMQ_METRIC_DESCS[]`、`IsNetworkErrno()`
-  - `zmq/BUILD.bazel`：新增 `zmq_metrics_def` header-only Bazel target
-  - `tests/ut/common/rpc/BUILD.bazel`：新建，注册 `zmq_metrics_test` Bazel test target
-
----
-
-**关键信息**
-
-- **指标设计原则**
-  - 成功路径仅增加 Histogram 计时（2 次 `steady_clock::now()` + `Observe()`，~70-100ns/call），无额外分支。
-  - 失败路径 Counter 全部在 `rc == -1` 分支内，成功路径零开销。
-  - 所有时延测量使用本机 `steady_clock`（单调时钟），不依赖跨机器时钟同步；跨机器分析通过 delta cycle 号对齐。
-  - 不使用 PerfPoint，不修改已有 PerfPoint 调用。
-
-- **故障定界（Layer 1）**
-  - `zmq_socket_ref.cpp`：`SendMsg` / `RecvMsg` 失败路径分别递增 `zmq.send.fail` / `zmq.send.eagain` / `zmq.recv.fail` / `zmq.recv.eagain`；网络类 errno（ECONNREFUSED、ENETDOWN 等 9 种）额外递增 `zmq.net_error`；每次硬失败更新 `zmq.last_errno` Gauge。
-  - `zmq_socket.cpp`：阻塞接收超时日志增加 `[ZMQ_RECV_TIMEOUT]` 前缀，提升检索精度。
-  - `zmq_stub_conn.cpp`：gateway socket 重建后递增 `zmq.gw_recreate`。
-  - `zmq_monitor.cpp`：`OnEventDisconnected` 递增 `zmq.evt.disconn`；三种握手失败回调各递增 `zmq.evt.hs_fail`。
-
-- **性能定界（Layer 2）**
-  - `zmq_socket_ref.cpp`：`zmq_msg_send` / `zmq_msg_recv` 系统调用前后分别取 `steady_clock::now()`，Observe 到 `zmq.io.send_us` / `zmq.io.recv_us` Histogram。
-  - `zmq_common.h`：`pb.SerializeToArray` 前后计时写入 `zmq.rpc.ser_us`；`pb.ParseFromArray` 前后计时写入 `zmq.rpc.deser_us`。
-  - errno 捕获时机：`int e = errno` 在 `Observe()` 调用之后、`ZmqErrnoToStatus` 之前保存，atomic 操作不修改 errno，安全。
-
-- **Bazel 兼容**
-  - 仓库 `build_defs.bzl` 使用 `native.cc_library`，与 Bazel 8/9 不兼容，需指定 `USE_BAZEL_VERSION=7.4.1`。
-  - 已验证通过，建议后续补充 `.bazelversion: 7.4.1` 文件固化版本。
-
----
-
-**实现思路（摘要）**
-
-**新建文件**
-
-- `src/datasystem/common/rpc/zmq/zmq_metrics_def.h`
-  - `ZmqMetricId` 枚举（ID 范围 100-119，业务 0-99，URMA 200-299）
-  - `ZMQ_METRIC_DESCS[]`：13 个 MetricDesc 描述符
-  - `IsNetworkErrno(int e)`：9 种网络类 errno 判定
-- `tests/ut/common/rpc/zmq_metrics_test.cpp`：20 个 gtest 用例
-- `tests/ut/common/rpc/BUILD.bazel`：Bazel test target
-
-**修改文件**
-
-- `src/datasystem/common/rpc/zmq/zmq_socket_ref.cpp`：I/O Histogram + 故障 Counter（含 errno 保存顺序修正）
-- `src/datasystem/common/rpc/zmq/zmq_common.h`：序列化/反序列化 Histogram
-- `src/datasystem/common/rpc/zmq/zmq_socket.cpp`：超时日志前缀
-- `src/datasystem/common/rpc/zmq/zmq_stub_conn.cpp`：gateway 重建 Counter
-- `src/datasystem/common/rpc/zmq/zmq_monitor.cpp`：Monitor 事件 Counter
-- `src/datasystem/common/rpc/zmq/BUILD.bazel`：`zmq_metrics_def` target + 4 个 target 补充 dep
-
----
-
-**验证结果**
-
-- **CMake 构建**：`common_rpc_zmq` target 编译通过（`cmake --build . --target common_rpc_zmq -j8`）
-- **Bazel 构建**：5 个 zmq target 全部 `Build completed successfully`
-  ```
-  //src/datasystem/common/rpc/zmq:zmq_metrics_def  ✓
-  //src/datasystem/common/rpc/zmq:zmq_socket_ref   ✓
-  //src/datasystem/common/rpc/zmq:zmq_common        ✓
-  //src/datasystem/common/rpc/zmq:zmq_stub_conn     ✓
-  //src/datasystem/common/rpc/zmq:zmq_monitor       ✓
-  ```
-- **CMake UT**：`ZmqMetricsTest.*` 20/20 PASSED；`MetricsTest.*` 22/22 PASSED（共 42 用例）
-- **Bazel UT**：`//tests/ut/common/rpc:zmq_metrics_test` 20/20 PASSED in 0.7s
-
----
-
-**Commit 提交信息说明**
-
-**PR 标题示例**：  
 `feat(zmq): add metrics for ZMQ I/O fault isolation and performance profiling`
-
-**Commit 信息建议**：
-
-```text
-feat(zmq): add metrics for ZMQ I/O fault isolation and performance profiling
-
-- add zmq_metrics_def.h: 13 metric IDs (counter/gauge/histogram, IDs 100-113)
-- instrument zmq_socket_ref: I/O histogram (send/recv us) + fault counters
-  with IsNetworkErrno classification and zmq.last_errno gauge
-- instrument zmq_common.h: protobuf ser/deser latency histograms
-- add zmq.gw_recreate counter in zmq_stub_conn on gateway recreation
-- add zmq.evt.disconn / zmq.evt.hs_fail counters in zmq_monitor
-- add zmq_metrics_def Bazel target; wire deps in zmq/BUILD.bazel
-- add tests/ut/common/rpc/BUILD.bazel with zmq_metrics_test (20 cases)
-- all 42 UT cases pass on both CMake and Bazel (USE_BAZEL_VERSION=7.4.1)
-```
 
 ---
 
 **Self-checklist**
 
-- [ ] `zmq.send.fail` / `zmq.recv.fail` / `zmq.net_error` 在失败路径上正确递增
-- [ ] `zmq.last_errno` 在每次硬失败时更新（EAGAIN / EINTR 不更新）
-- [ ] `errno` 在 `Observe()` 之后、`ZmqErrnoToStatus` 之前捕获（无 errno 污染风险）
-- [ ] I/O Histogram 在成功路径无额外分支（仅 2 次 `now()` + `Observe()`）
-- [ ] `zmq_common.h` 序列化 Histogram 不影响现有 PerfPoint 调用（保持不动）
-- [ ] CMake 与 Bazel 构建均通过
-- [ ] 20 个 UT 用例全部通过（CMake + Bazel 双验证）
-- [ ] `BUILD.bazel` 新增 `zmq_metrics_def` header-only target，无 zmq 传递依赖
-- [ ] 无对外 API 签名变化，无 StatusCode 枚举变化
+- [x] 不改错误码，不改对外 API
+- [x] ZMQ 故障/性能 metrics 已接入 send/recv 与 ser/deser 路径
+- [x] CMake 构建通过（`common_rpc_zmq`、`ds_ut`、`ds_st`）
+- [x] UT 主回归通过（`82/82`）
+- [x] 故障注入 ST 通过（`4/4`）
+- [x] 关键日志自动校验通过（`15/15`）
+- [x] 远端复跑证据与测试串讲文档已补充

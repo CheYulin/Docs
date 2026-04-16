@@ -145,15 +145,15 @@ void Histogram::Observe(uint64_t value) const {
 
 | # | Metric Name | Type | ID | 触发条件 | 路径 |
 |---|-------------|------|----|---------|------|
-| 1 | `zmq.send.fail` | Counter | 100 | `SendMsg` 返回 -1 且 errno 非 EAGAIN/EINTR | 失败 |
-| 2 | `zmq.recv.fail` | Counter | 101 | `RecvMsg` 返回 -1 且 errno 非 EAGAIN/EINTR | 失败 |
-| 3 | `zmq.send.eagain` | Counter | 102 | `SendMsg` errno == EAGAIN | 失败 |
-| 4 | `zmq.recv.eagain` | Counter | 103 | `RecvMsg` errno == EAGAIN 且 blocking 模式 | 失败 |
-| 5 | `zmq.net_error` | Counter | 104 | errno 属于网络类 | 失败 |
-| 6 | `zmq.last_errno` | Gauge | 105 | 最近一次硬失败的 errno | 失败 |
-| 7 | `zmq.gw_recreate` | Counter | 106 | gateway 重建成功 | 低频 |
-| 8 | `zmq.evt.disconn` | Counter | 107 | `OnEventDisconnected` | 低频 |
-| 9 | `zmq.evt.hs_fail` | Counter | 108 | handshake 失败 | 低频 |
+| 1 | `zmq_send_failure_total` | Counter | 100 | `SendMsg` 返回 -1 且 errno 非 EAGAIN/EINTR | 失败 |
+| 2 | `zmq_receive_failure_total` | Counter | 101 | `RecvMsg` 返回 -1 且 errno 非 EAGAIN/EINTR | 失败 |
+| 3 | `zmq_send_try_again_total` | Counter | 102 | `SendMsg` errno == EAGAIN | 失败 |
+| 4 | `zmq_receive_try_again_total` | Counter | 103 | `RecvMsg` errno == EAGAIN 且 blocking 模式 | 失败 |
+| 5 | `zmq_network_error_total` | Counter | 104 | errno 属于网络类 | 失败 |
+| 6 | `zmq_last_error_number` | Gauge | 105 | 最近一次硬失败的 errno | 失败 |
+| 7 | `zmq_gateway_recreate_total` | Counter | 106 | gateway 重建成功 | 低频 |
+| 8 | `zmq_event_disconnect_total` | Counter | 107 | `OnEventDisconnected` | 低频 |
+| 9 | `zmq_event_handshake_failure_total` | Counter | 108 | handshake 失败 | 低频 |
 
 ### 5.2 性能定界 Histogram（"自证清白"，成功路径每次 ~70ns）
 
@@ -162,17 +162,17 @@ void Histogram::Observe(uint64_t value) const {
 
 | # | Metric Name | Type | ID | 度量对象 | 开销 |
 |---|-------------|------|----|---------|------|
-| 10 | `zmq.io.send_us` | Histogram | 110 | `zmq_msg_send` 系统调用耗时 | ~70ns/call |
-| 11 | `zmq.io.recv_us` | Histogram | 111 | `zmq_msg_recv` 系统调用耗时 | ~70ns/call |
-| 12 | `zmq.rpc.ser_us` | Histogram | 112 | Protobuf 序列化 (`SerializeToArray`) 耗时 | ~70ns/call |
-| 13 | `zmq.rpc.deser_us` | Histogram | 113 | Protobuf 反序列化 (`ParseFromArray`) 耗时 | ~70ns/call |
+| 10 | `zmq_send_io_latency` | Histogram | 110 | `zmq_msg_send` 系统调用耗时 | ~70ns/call |
+| 11 | `zmq_receive_io_latency` | Histogram | 111 | `zmq_msg_recv` 系统调用耗时 | ~70ns/call |
+| 12 | `zmq_rpc_serialize_latency` | Histogram | 112 | Protobuf 序列化 (`SerializeToArray`) 耗时 | ~70ns/call |
+| 13 | `zmq_rpc_deserialize_latency` | Histogram | 113 | Protobuf 反序列化 (`ParseFromArray`) 耗时 | ~70ns/call |
 
 > **为什么需要 4 个 Histogram？**
 >
 > 仅有 zmq I/O 时延无法完成"自证清白"——需要 RPC 框架自身的时延做对比。
 > 序列化/反序列化是 RPC 框架在热路径上的**唯一核心开销**（路由/队列在独立线程，不在调用线程关键路径上）。
 > 4 个 Histogram 让运维可以直接从 summary 对比：
-> - `zmq.io.send_us avg=500us` vs `zmq.rpc.ser_us avg=15us` → **socket I/O 占比 97%，RPC 框架清白**
+> - `zmq_send_io_latency avg=500us` vs `zmq_rpc_serialize_latency avg=15us` → **socket I/O 占比 97%，RPC 框架清白**
 
 ### 5.3 开销总结
 
@@ -194,10 +194,10 @@ void Histogram::Observe(uint64_t value) const {
 ```
 每个 metrics 周期（默认 10s）输出：
 
-zmq.io.send_us,count=+5000,avg=120us,max=3500us   ← socket 发送：平均 120μs
-zmq.io.recv_us,count=+5000,avg=450us,max=12000us   ← socket 接收：平均 450μs（含 blocking 等待）
-zmq.rpc.ser_us,count=+5000,avg=12us,max=85us       ← 序列化：平均 12μs
-zmq.rpc.deser_us,count=+5000,avg=8us,max=60us      ← 反序列化：平均 8μs
+zmq_send_io_latency,count=+5000,avg=120us,max=3500us   ← socket 发送：平均 120μs
+zmq_receive_io_latency,count=+5000,avg=450us,max=12000us   ← socket 接收：平均 450μs（含 blocking 等待）
+zmq_rpc_serialize_latency,count=+5000,avg=12us,max=85us       ← 序列化：平均 12μs
+zmq_rpc_deserialize_latency,count=+5000,avg=8us,max=60us      ← 反序列化：平均 8μs
 ```
 
 **自证公式**：
@@ -218,21 +218,21 @@ RPC 框架占比 = (ser + deser) / (send + recv + ser + deser)
 
 ```
 机器 A（client）:
-  zmq.io.send_us:  avg=50us      ← 本机发送快
-  zmq.io.recv_us:  avg=8000us    ← 等应答慢 → 瓶颈在对端或网络
+  zmq_send_io_latency:  avg=50us      ← 本机发送快
+  zmq_receive_io_latency:  avg=8000us    ← 等应答慢 → 瓶颈在对端或网络
 
 机器 B（server）:
-  zmq.io.recv_us:  avg=30us      ← 收到快
-  zmq.io.send_us:  avg=40us      ← 发送快
-  zmq.rpc.ser_us:  avg=10us      ← 序列化快
+  zmq_receive_io_latency:  avg=30us      ← 收到快
+  zmq_send_io_latency:  avg=40us      ← 发送快
+  zmq_rpc_serialize_latency:  avg=10us      ← 序列化快
   → Server 侧 I/O + 框架都快，瓶颈在 A→B 网络或 B 业务逻辑
 ```
 
 **方法 B：Delta 模式检测时间点**
 
 不看绝对时间戳，只看 **delta 跳变的周期号 (cycle)**：
-- 如果 A 的 `zmq.io.recv_us max` 在 cycle=5 突然飙升
-- B 的 `zmq.send.fail` 也在 cycle=5 附近突增
+- 如果 A 的 `zmq_receive_io_latency max` 在 cycle=5 突然飙升
+- B 的 `zmq_send_failure_total` 也在 cycle=5 附近突增
 - → 同一时段，网络故障同时影响两端
 
 > 周期号是本机 `metrics::Start()` 后的计数器，与时钟无关，**跨机器对齐靠 cycle 号或日志行号区间**。
@@ -242,16 +242,16 @@ RPC 框架占比 = (ser + deser) / (send + recv + ser + deser)
 ```
   整体 RPC 延迟高？
         │
-        ├── zmq.io.recv_us avg 高 (>1ms)?
+        ├── zmq_receive_io_latency avg 高 (>1ms)?
         │       │
-        │       ├── zmq.send.fail/recv.fail > 0? → 网卡/网络故障
+        │       ├── zmq_send_failure_total/recv.fail > 0? → 网卡/网络故障
         │       │
         │       └── 全 +0 → 对端慢或网络延迟大
         │
-        ├── zmq.rpc.ser_us avg 高 (>100us)?
+        ├── zmq_rpc_serialize_latency avg 高 (>100us)?
         │       → 序列化瓶颈（消息体过大）
         │
-        ├── zmq.rpc.deser_us avg 高?
+        ├── zmq_rpc_deserialize_latency avg 高?
         │       → 反序列化瓶颈
         │
         └── 全部 avg 低?
@@ -311,19 +311,19 @@ inline bool IsNetworkErrno(int e) {
 }
 
 inline const metrics::MetricDesc ZMQ_METRIC_DESCS[] = {
-    {ZMQ_M_SEND_FAIL,   "zmq.send.fail",     metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_RECV_FAIL,   "zmq.recv.fail",     metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_SEND_EAGAIN, "zmq.send.eagain",   metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_RECV_EAGAIN, "zmq.recv.eagain",   metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_NET_ERROR,   "zmq.net_error",     metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_LAST_ERRNO,  "zmq.last_errno",    metrics::MetricType::GAUGE,     ""},
-    {ZMQ_M_GW_RECREATE, "zmq.gw_recreate",   metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_EVT_DISCONN, "zmq.evt.disconn",   metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_EVT_HS_FAIL, "zmq.evt.hs_fail",   metrics::MetricType::COUNTER,   "count"},
-    {ZMQ_M_IO_SEND,     "zmq.io.send_us",    metrics::MetricType::HISTOGRAM, "us"},
-    {ZMQ_M_IO_RECV,     "zmq.io.recv_us",    metrics::MetricType::HISTOGRAM, "us"},
-    {ZMQ_M_SER,          "zmq.rpc.ser_us",    metrics::MetricType::HISTOGRAM, "us"},
-    {ZMQ_M_DESER,        "zmq.rpc.deser_us",  metrics::MetricType::HISTOGRAM, "us"},
+    {ZMQ_M_SEND_FAIL,   "zmq_send_failure_total",     metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_RECV_FAIL,   "zmq_receive_failure_total",     metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_SEND_EAGAIN, "zmq_send_try_again_total",   metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_RECV_EAGAIN, "zmq_receive_try_again_total",   metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_NET_ERROR,   "zmq_network_error_total",     metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_LAST_ERRNO,  "zmq_last_error_number",    metrics::MetricType::GAUGE,     ""},
+    {ZMQ_M_GW_RECREATE, "zmq_gateway_recreate_total",   metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_EVT_DISCONN, "zmq_event_disconnect_total",   metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_EVT_HS_FAIL, "zmq_event_handshake_failure_total",   metrics::MetricType::COUNTER,   "count"},
+    {ZMQ_M_IO_SEND,     "zmq_send_io_latency",    metrics::MetricType::HISTOGRAM, "us"},
+    {ZMQ_M_IO_RECV,     "zmq_receive_io_latency",    metrics::MetricType::HISTOGRAM, "us"},
+    {ZMQ_M_SER,          "zmq_rpc_serialize_latency",    metrics::MetricType::HISTOGRAM, "us"},
+    {ZMQ_M_DESER,        "zmq_rpc_deserialize_latency",  metrics::MetricType::HISTOGRAM, "us"},
 };
 constexpr size_t ZMQ_METRIC_DESCS_COUNT = sizeof(ZMQ_METRIC_DESCS) / sizeof(ZMQ_METRIC_DESCS[0]);
 }  // namespace datasystem
@@ -518,20 +518,20 @@ void ZmqMonitor::OnEventHandshakeFailedAuth(...)       { LOG(...); metrics::GetC
 Metrics Summary, version=v0, cycle=10, interval=10000ms
 
 Total:
-zmq.send.fail=0
-zmq.recv.fail=0
-zmq.net_error=0
-zmq.last_errno=0
-zmq.io.send_us,count=50000,avg=80us,max=350us       ← socket I/O 稳定
-zmq.io.recv_us,count=50000,avg=120us,max=800us
-zmq.rpc.ser_us,count=50000,avg=10us,max=45us         ← 序列化开销很小
-zmq.rpc.deser_us,count=50000,avg=8us,max=40us
+zmq_send_failure_total=0
+zmq_receive_failure_total=0
+zmq_network_error_total=0
+zmq_last_error_number=0
+zmq_send_io_latency,count=50000,avg=80us,max=350us       ← socket I/O 稳定
+zmq_receive_io_latency,count=50000,avg=120us,max=800us
+zmq_rpc_serialize_latency,count=50000,avg=10us,max=45us         ← 序列化开销很小
+zmq_rpc_deserialize_latency,count=50000,avg=8us,max=40us
 
 Compare with 10000ms before:
-zmq.send.fail=+0
-zmq.recv.fail=+0
-zmq.io.send_us,count=+5000,avg=82us,max=200us        ← 本周期 I/O avg 稳定
-zmq.rpc.ser_us,count=+5000,avg=10us,max=30us          ← 框架开销占比 < 10%
+zmq_send_failure_total=+0
+zmq_receive_failure_total=+0
+zmq_send_io_latency,count=+5000,avg=82us,max=200us        ← 本周期 I/O avg 稳定
+zmq_rpc_serialize_latency,count=+5000,avg=10us,max=30us          ← 框架开销占比 < 10%
 ```
 
 **结论**：I/O avg 80-120μs，框架 avg 10-8μs → **RPC 框架占比 ~10%，自证清白**。
@@ -540,15 +540,15 @@ zmq.rpc.ser_us,count=+5000,avg=10us,max=30us          ← 框架开销占比 < 1
 
 ```
 Compare with 10000ms before:
-zmq.send.fail=+15
-zmq.recv.fail=+23
-zmq.net_error=+38
-zmq.last_errno=+0              ← gauge delta (值=113 EHOSTUNREACH)
-zmq.io.send_us,count=+3000,avg=850us,max=50000us     ← I/O 飙升!
-zmq.io.recv_us,count=+2500,avg=3500us,max=65000us    ← I/O 飙升!
-zmq.rpc.ser_us,count=+3000,avg=11us,max=50us          ← 框架正常
-zmq.evt.disconn=+5
-zmq.gw_recreate=+3
+zmq_send_failure_total=+15
+zmq_receive_failure_total=+23
+zmq_network_error_total=+38
+zmq_last_error_number=+0              ← gauge delta (值=113 EHOSTUNREACH)
+zmq_send_io_latency,count=+3000,avg=850us,max=50000us     ← I/O 飙升!
+zmq_receive_io_latency,count=+2500,avg=3500us,max=65000us    ← I/O 飙升!
+zmq_rpc_serialize_latency,count=+3000,avg=11us,max=50us          ← 框架正常
+zmq_event_disconnect_total=+5
+zmq_gateway_recreate_total=+3
 ```
 
 **结论**：I/O max 飙升至 50-65ms，net_error +38，框架 avg 不变 → **网卡/网络层故障，RPC 框架清白**。
@@ -585,14 +585,14 @@ public:
 TEST_F(ZmqMetricsTest, all_metrics_registered)
 {
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.send.fail=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq.recv.fail=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq.net_error=0"),   std::string::npos);
-    EXPECT_NE(s.find("zmq.last_errno=0"),  std::string::npos);
-    EXPECT_NE(s.find("zmq.io.send_us,count=0"), std::string::npos);
-    EXPECT_NE(s.find("zmq.io.recv_us,count=0"), std::string::npos);
-    EXPECT_NE(s.find("zmq.rpc.ser_us,count=0"), std::string::npos);
-    EXPECT_NE(s.find("zmq.rpc.deser_us,count=0"), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_failure_total=0"),   std::string::npos);
+    EXPECT_NE(s.find("zmq_receive_failure_total=0"),   std::string::npos);
+    EXPECT_NE(s.find("zmq_network_error_total=0"),   std::string::npos);
+    EXPECT_NE(s.find("zmq_last_error_number=0"),  std::string::npos);
+    EXPECT_NE(s.find("zmq_send_io_latency,count=0"), std::string::npos);
+    EXPECT_NE(s.find("zmq_receive_io_latency,count=0"), std::string::npos);
+    EXPECT_NE(s.find("zmq_rpc_serialize_latency,count=0"), std::string::npos);
+    EXPECT_NE(s.find("zmq_rpc_deserialize_latency,count=0"), std::string::npos);
 }
 
 // Case 2: 故障 Counter
@@ -601,8 +601,8 @@ TEST_F(ZmqMetricsTest, send_fail_counter)
     metrics::GetCounter(ZMQ_M_SEND_FAIL).Inc();
     metrics::GetCounter(ZMQ_M_SEND_FAIL).Inc();
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.send.fail=2"),  std::string::npos);
-    EXPECT_NE(s.find("zmq.send.fail=+2"), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_failure_total=2"),  std::string::npos);
+    EXPECT_NE(s.find("zmq_send_failure_total=+2"), std::string::npos);
 }
 
 // Case 3: recv.fail + net_error + last_errno 联动
@@ -612,9 +612,9 @@ TEST_F(ZmqMetricsTest, recv_fail_with_net_error)
     metrics::GetCounter(ZMQ_M_NET_ERROR).Inc();
     metrics::GetGauge(ZMQ_M_LAST_ERRNO).Set(ECONNRESET);
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.recv.fail=1"), std::string::npos);
-    EXPECT_NE(s.find("zmq.net_error=1"), std::string::npos);
-    EXPECT_NE(s.find("zmq.last_errno=" + std::to_string(ECONNRESET)), std::string::npos);
+    EXPECT_NE(s.find("zmq_receive_failure_total=1"), std::string::npos);
+    EXPECT_NE(s.find("zmq_network_error_total=1"), std::string::npos);
+    EXPECT_NE(s.find("zmq_last_error_number=" + std::to_string(ECONNRESET)), std::string::npos);
 }
 
 // Case 4: Gauge 覆盖
@@ -623,7 +623,7 @@ TEST_F(ZmqMetricsTest, last_errno_gauge_override)
     metrics::GetGauge(ZMQ_M_LAST_ERRNO).Set(ECONNREFUSED);
     metrics::GetGauge(ZMQ_M_LAST_ERRNO).Set(EHOSTUNREACH);
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.last_errno=" + std::to_string(EHOSTUNREACH)), std::string::npos);
+    EXPECT_NE(s.find("zmq_last_error_number=" + std::to_string(EHOSTUNREACH)), std::string::npos);
 }
 
 // Case 5: Delta 正确
@@ -633,8 +633,8 @@ TEST_F(ZmqMetricsTest, delta_between_dumps)
     (void)metrics::DumpSummaryForTest();
     metrics::GetCounter(ZMQ_M_RECV_FAIL).Inc(3);
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.recv.fail=8"),  std::string::npos);
-    EXPECT_NE(s.find("zmq.recv.fail=+3"), std::string::npos);
+    EXPECT_NE(s.find("zmq_receive_failure_total=8"),  std::string::npos);
+    EXPECT_NE(s.find("zmq_receive_failure_total=+3"), std::string::npos);
 }
 
 // Case 6: 零 delta
@@ -643,8 +643,8 @@ TEST_F(ZmqMetricsTest, zero_delta_when_idle)
     metrics::GetCounter(ZMQ_M_SEND_FAIL).Inc(1);
     (void)metrics::DumpSummaryForTest();
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.send.fail=+0"), std::string::npos);
-    EXPECT_NE(s.find("zmq.net_error=+0"), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_failure_total=+0"), std::string::npos);
+    EXPECT_NE(s.find("zmq_network_error_total=+0"), std::string::npos);
 }
 
 // Case 7: IsNetworkErrno 判定
@@ -671,9 +671,9 @@ TEST_F(ZmqMetricsTest, layer2_connection_metrics)
     metrics::GetCounter(ZMQ_M_EVT_DISCONN).Inc(3);
     metrics::GetCounter(ZMQ_M_EVT_HS_FAIL).Inc(2);
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.gw_recreate=1"), std::string::npos);
-    EXPECT_NE(s.find("zmq.evt.disconn=3"), std::string::npos);
-    EXPECT_NE(s.find("zmq.evt.hs_fail=2"), std::string::npos);
+    EXPECT_NE(s.find("zmq_gateway_recreate_total=1"), std::string::npos);
+    EXPECT_NE(s.find("zmq_event_disconnect_total=3"), std::string::npos);
+    EXPECT_NE(s.find("zmq_event_handshake_failure_total=2"), std::string::npos);
 }
 
 // Case 9: Histogram I/O 计时
@@ -683,8 +683,8 @@ TEST_F(ZmqMetricsTest, io_histogram_observe)
     metrics::GetHistogram(ZMQ_M_IO_SEND).Observe(200);
     metrics::GetHistogram(ZMQ_M_IO_RECV).Observe(500);
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.io.send_us,count=2,avg=150us,max=200us"), std::string::npos);
-    EXPECT_NE(s.find("zmq.io.recv_us,count=1,avg=500us,max=500us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_io_latency,count=2,avg=150us,max=200us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_receive_io_latency,count=1,avg=500us,max=500us"), std::string::npos);
 }
 
 // Case 10: Histogram 序列化/反序列化计时
@@ -694,8 +694,8 @@ TEST_F(ZmqMetricsTest, ser_deser_histogram)
     metrics::GetHistogram(ZMQ_M_SER).Observe(20);
     metrics::GetHistogram(ZMQ_M_DESER).Observe(8);
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.rpc.ser_us,count=2,avg=15us,max=20us"), std::string::npos);
-    EXPECT_NE(s.find("zmq.rpc.deser_us,count=1,avg=8us,max=8us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_rpc_serialize_latency,count=2,avg=15us,max=20us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_rpc_deserialize_latency,count=1,avg=8us,max=8us"), std::string::npos);
 }
 
 // Case 11: Histogram delta — periodMax 重置
@@ -705,8 +705,8 @@ TEST_F(ZmqMetricsTest, histogram_period_max_reset)
     (void)metrics::DumpSummaryForTest();
     metrics::GetHistogram(ZMQ_M_IO_SEND).Observe(200);
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.io.send_us,count=2,avg=600us,max=1000us"), std::string::npos);
-    EXPECT_NE(s.find("zmq.io.send_us,count=+1,avg=200us,max=200us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_io_latency,count=2,avg=600us,max=1000us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_io_latency,count=+1,avg=200us,max=200us"), std::string::npos);
 }
 
 // Case 12: 自证清白场景 — I/O 占比高
@@ -719,8 +719,8 @@ TEST_F(ZmqMetricsTest, scenario_self_prove_innocent)
         metrics::GetHistogram(ZMQ_M_DESER).Observe(8);
     }
     auto s = metrics::DumpSummaryForTest();
-    EXPECT_NE(s.find("zmq.io.send_us,count=100,avg=500us"), std::string::npos);
-    EXPECT_NE(s.find("zmq.rpc.ser_us,count=100,avg=10us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_io_latency,count=100,avg=500us"), std::string::npos);
+    EXPECT_NE(s.find("zmq_rpc_serialize_latency,count=100,avg=10us"), std::string::npos);
 }
 
 // Case 13: 并发安全
@@ -740,8 +740,8 @@ TEST_F(ZmqMetricsTest, concurrent_histogram_and_counter)
     for (auto &w : workers) { w.join(); }
     auto s = metrics::DumpSummaryForTest();
     auto expected = std::to_string(threads * loops);
-    EXPECT_NE(s.find("zmq.io.send_us,count=" + expected), std::string::npos);
-    EXPECT_NE(s.find("zmq.send.fail=" + expected), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_io_latency,count=" + expected), std::string::npos);
+    EXPECT_NE(s.find("zmq_send_failure_total=" + expected), std::string::npos);
 }
 
 // Case 14: 未 Init 时不 crash
@@ -767,7 +767,7 @@ TEST_F(ZmqMetricsTest, noop_before_init)
 | **正常 RPC** | N 次正常调用 | `io.send_us`/`recv_us` count > 0, `ser_us`/`deser_us` count > 0, 所有故障 Counter = 0 | 成功路径 Histogram 正常采集 |
 | **杀 server** | 正常通信后 kill server | `recv.fail` > 0 或 `recv.eagain` > 0, `gw_recreate` > 0, `io.recv_us max` 飙升 | 故障 + I/O 延迟联动 |
 | **正常 I/O vs 框架比例** | 稳定负载 | `io.send_us avg` >> `ser_us avg` | 自证清白比例可观测 |
-| **Summary 格式** | 等待 1 个 metrics 周期 | 日志包含 `zmq.io.send_us,count=`, `[ZMQ_SEND_FAIL]` 可 grep | 运维可用性 |
+| **Summary 格式** | 等待 1 个 metrics 周期 | 日志包含 `zmq_send_io_latency,count=`, `[ZMQ_SEND_FAIL]` 可 grep | 运维可用性 |
 
 ### 11.3 性能开销验证
 

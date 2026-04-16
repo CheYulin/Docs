@@ -27,24 +27,24 @@
 
 | 指标名 | 类型 | 触发时机 | 定界价值 |
 |--------|------|---------|---------|
-| `zmq.send.fail` | Counter | `zmq_msg_send` 返回 -1 且非 EAGAIN/EINTR | ZMQ 发送硬失败 |
-| `zmq.recv.fail` | Counter | `zmq_msg_recv` 返回 -1 且非 EAGAIN/EINTR | ZMQ 接收硬失败 |
-| `zmq.send.eagain` | Counter | 发送返回 EAGAIN | 发送队列 HWM 背压 |
-| `zmq.recv.eagain` | Counter | 阻塞模式接收超时 EAGAIN | 接收超时（对端 hang） |
-| `zmq.net_error` | Counter | errno 为网络类错误（ECONNREFUSED/ENETDOWN 等） | 网卡/网络层故障 |
-| `zmq.last_errno` | Gauge | 每次硬失败时更新 | 快速查看最近 errno 值 |
-| `zmq.gw_recreate` | Counter | gateway socket 重建成功 | 连接重建频率 |
-| `zmq.evt.disconn` | Counter | ZMQ Monitor 收到 DISCONNECTED 事件 | 连接断开计数 |
-| `zmq.evt.hs_fail` | Counter | ZMQ Monitor 握手失败事件（3 种变体） | TLS/认证握手故障 |
+| `zmq_send_failure_total` | Counter | `zmq_msg_send` 返回 -1 且非 EAGAIN/EINTR | ZMQ 发送硬失败 |
+| `zmq_receive_failure_total` | Counter | `zmq_msg_recv` 返回 -1 且非 EAGAIN/EINTR | ZMQ 接收硬失败 |
+| `zmq_send_try_again_total` | Counter | 发送返回 EAGAIN | 发送队列 HWM 背压 |
+| `zmq_receive_try_again_total` | Counter | 阻塞模式接收超时 EAGAIN | 接收超时（对端 hang） |
+| `zmq_network_error_total` | Counter | errno 为网络类错误（ECONNREFUSED/ENETDOWN 等） | 网卡/网络层故障 |
+| `zmq_last_error_number` | Gauge | 每次硬失败时更新 | 快速查看最近 errno 值 |
+| `zmq_gateway_recreate_total` | Counter | gateway socket 重建成功 | 连接重建频率 |
+| `zmq_event_disconnect_total` | Counter | ZMQ Monitor 收到 DISCONNECTED 事件 | 连接断开计数 |
+| `zmq_event_handshake_failure_total` | Counter | ZMQ Monitor 握手失败事件（3 种变体） | TLS/认证握手故障 |
 
 ### Layer 2：性能定界指标（每次调用均采样，开销 ~70-100ns/call）
 
 | 指标名 | 类型 | 测量点 | 定界价值 |
 |--------|------|-------|---------|
-| `zmq.io.send_us` | Histogram | `zmq_msg_send` 系统调用前后 | socket 写耗时 |
-| `zmq.io.recv_us` | Histogram | `zmq_msg_recv` 系统调用前后 | socket 读耗时 |
-| `zmq.rpc.ser_us` | Histogram | `pb.SerializeToArray()` 前后 | protobuf 序列化耗时 |
-| `zmq.rpc.deser_us` | Histogram | `pb.ParseFromArray()` 前后 | protobuf 反序列化耗时 |
+| `zmq_send_io_latency` | Histogram | `zmq_msg_send` 系统调用前后 | socket 写耗时 |
+| `zmq_receive_io_latency` | Histogram | `zmq_msg_recv` 系统调用前后 | socket 读耗时 |
+| `zmq_rpc_serialize_latency` | Histogram | `pb.SerializeToArray()` 前后 | protobuf 序列化耗时 |
+| `zmq_rpc_deserialize_latency` | Histogram | `pb.ParseFromArray()` 前后 | protobuf 反序列化耗时 |
 
 **性能自证公式**：
 
@@ -61,12 +61,12 @@ RPC 框架额外开销占比 = (ser_us.avg + deser_us.avg) /
 ```
 整体 RPC 延迟高？
       │
-      ├── zmq.io.recv_us avg 高 (>1ms)?
-      │       ├── zmq.net_error / zmq.send.fail / zmq.recv.fail > 0 → 网卡/网络故障
+      ├── zmq_receive_io_latency avg 高 (>1ms)?
+      │       ├── zmq_network_error_total / zmq_send_failure_total / zmq_receive_failure_total > 0 → 网卡/网络故障
       │       └── 全 +0 → 对端处理慢或网络延迟
       │
-      ├── zmq.rpc.ser_us avg 高 (>100us) → 消息体过大，序列化瓶颈
-      ├── zmq.rpc.deser_us avg 高         → 反序列化瓶颈
+      ├── zmq_rpc_serialize_latency avg 高 (>100us) → 消息体过大，序列化瓶颈
+      ├── zmq_rpc_deserialize_latency avg 高         → 反序列化瓶颈
       └── 全部 avg 低                     → 瓶颈不在 RPC/ZMQ 层，检查业务逻辑
 ```
 
@@ -89,7 +89,7 @@ RPC 框架额外开销占比 = (ser_us.avg + deser_us.avg) /
 | `src/datasystem/common/rpc/zmq/zmq_socket_ref.cpp` | `RecvMsg` / `SendMsg` 增加 I/O Histogram 计时 + 失败 Counter |
 | `src/datasystem/common/rpc/zmq/zmq_common.h` | `SerializeToZmqMessage` / `ParseFromZmqMessage` 增加序列化 Histogram |
 | `src/datasystem/common/rpc/zmq/zmq_socket.cpp` | 阻塞超时日志增加 `[ZMQ_RECV_TIMEOUT]` 前缀 |
-| `src/datasystem/common/rpc/zmq/zmq_stub_conn.cpp` | gateway 重建后递增 `zmq.gw_recreate` Counter |
+| `src/datasystem/common/rpc/zmq/zmq_stub_conn.cpp` | gateway 重建后递增 `zmq_gateway_recreate_total` Counter |
 | `src/datasystem/common/rpc/zmq/zmq_monitor.cpp` | disconnect / handshake fail 事件递增对应 Counter |
 | `src/datasystem/common/rpc/zmq/BUILD.bazel` | 新增 `zmq_metrics_def` header-only target；补充 4 个 target 的 dep |
 

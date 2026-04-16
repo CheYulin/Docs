@@ -383,7 +383,157 @@ USE_BAZEL_VERSION=7.4.1 bazel test //tests/ut/common/rpc:zmq_metrics_test --jobs
 
 ---
 
-## 七、下一步（待人工决策）
+## 九、2026-04-16 故障注入 + 关键日志验收（`ZmqMetricsFaultTest`）
+
+**对照文档**：`ZMQ-metrics-故障注入与日志定界-测试串讲.md`（同目录）。
+
+### 9.1 用例与命令
+
+```bash
+cd build && ./tests/st/ds_st --gtest_filter='ZmqMetricsFaultTest.*' --alsologtostderr
+```
+
+**远端执行结果**：`[  PASSED  ] 4 tests.`（约 17s）。
+
+### 9.2 日志脚本验收
+
+```bash
+bash vibe-coding-files/scripts/testing/verify/verify_zmq_fault_injection_logs.sh /path/to/ds_st_zmq_fault.log
+```
+
+**本次跑出的摘要**（本地保存的 `/tmp/zmq_fault_injection_run.log`）：
+
+```text
+Mandatory RESULT: 15 matched | 0 missing
+```
+
+覆盖：`[FAULT INJECT]`、`[METRICS DUMP - …]`、`[ISOLATION]`、`[SELF-PROOF]`、`[SELF-PROOF REPORT]`、`CONCLUSION:`、以及 gtest 四用例统计行。  
+**说明**：本场景下**未要求**出现 `[ZMQ_RECV_FAIL]` / `[ZMQ_SEND_FAIL]` / `[ZMQ_RECV_TIMEOUT]`（stub 路径与故障类型决定，详见串讲文档 §6）。
+
+---
+
+## 十、2026-04-16 远端复跑证据（Build + UT + ST + 日志验收）
+
+**目标**：按最新代码状态再执行一轮远端构建与测试，补充“可复核的命令 + 关键输出摘要”。  
+**远端节点**：`root@38.76.164.55`  
+**构建目录**：`/root/workspace/git-repos/yuanrong-datasystem/build`
+
+### 10.1 复跑命令（单次串行执行）
+
+```bash
+ssh root@38.76.164.55 'set -euo pipefail
+cd /root/workspace/git-repos/yuanrong-datasystem/build
+cmake --build . --target ds_ut ds_st -j8
+echo "=== RUN UT: ZmqMetricsTest + MetricsTest ==="
+./tests/ut/ds_ut --gtest_filter="ZmqMetricsTest.*:MetricsTest.*" --gtest_color=yes
+echo "=== RUN ST: ZmqMetricsFaultTest ==="
+./tests/st/ds_st --gtest_filter="ZmqMetricsFaultTest.*" --alsologtostderr
+'
+```
+
+### 10.2 构建阶段关键输出
+
+```text
+[100%] Built target ds_ut
+[100%] Built target ds_st
+```
+
+### 10.3 UT 关键输出摘要
+
+```text
+=== RUN UT: ZmqMetricsTest + MetricsTest ===
+[  PASSED  ] 82 tests.
+```
+
+### 10.4 ST（故障注入）关键输出摘要
+
+```text
+=== RUN ST: ZmqMetricsFaultTest ===
+[----------] 4 tests from ZmqMetricsFaultTest
+...
+[ISOLATION] gw_recreate total=4 delta=3 evt.disconn=0 recv.fail=0
+[ISOLATION] recv.fail=0 recv.eagain=0 send.fail=0 net_error=0  → ZMQ layer clean; fault is server-side latency
+[SELF-PROOF REPORT]
+...
+[  PASSED  ] 4 tests.
+```
+
+### 10.5 日志脚本验收（针对本次完整复跑日志）
+
+```bash
+bash vibe-coding-files/scripts/testing/verify/verify_zmq_fault_injection_logs.sh <full-rerun-log>
+```
+
+**关键结果**：
+
+```text
+Mandatory RESULT: 15 matched | 0 missing
+```
+
+结论：本次复跑中，故障注入场景对应的关键日志链完整，满足“用于定位/定界”的测试验收标准。
+
+---
+
+## 十一、2026-04-16 对齐 !586 的迁移与验证补充
+
+### 11.1 对齐点（代码结构）
+
+本轮已按 `!586` 方向完成结构收敛：**ZMQ metrics 并入 KV metrics 初始化体系**，不再保留独立 `zmq_metrics_def.h`。
+
+关键调整如下：
+
+1. `KvMetricId` 新增 ZMQ 通用指标枚举（不加 CLIENT/WORKER 前缀）：
+   - `ZMQ_SEND_FAILURE_TOTAL` / `ZMQ_RECEIVE_FAILURE_TOTAL`
+   - `ZMQ_SEND_TRY_AGAIN_TOTAL` / `ZMQ_RECEIVE_TRY_AGAIN_TOTAL`
+   - `ZMQ_NETWORK_ERROR_TOTAL` / `ZMQ_LAST_ERROR_NUMBER`
+   - `ZMQ_GATEWAY_RECREATE_TOTAL` / `ZMQ_EVENT_DISCONNECT_TOTAL` / `ZMQ_EVENT_HANDSHAKE_FAILURE_TOTAL`
+   - `ZMQ_SEND_IO_LATENCY` / `ZMQ_RECEIVE_IO_LATENCY` / `ZMQ_RPC_SERIALIZE_LATENCY` / `ZMQ_RPC_DESERIALIZE_LATENCY`
+2. `InitKvMetrics()` 统一注册 KV + ZMQ MetricDesc。
+3. ZMQ 热路径写法与现有 metrics 风格对齐，计数类优先使用 `METRIC_INC(...)` 宏。
+4. 删除独立文件：`src/datasystem/common/rpc/zmq/zmq_metrics_def.h`。
+5. Bazel 依赖同步收敛，移除 `zmq_metrics_def` target 依赖，统一依赖 `common_metrics`。
+
+### 11.2 对齐点（头文件职责）
+
+为避免将业务错误分类逻辑放入 metrics 公共头，已做进一步收敛：
+
+- 从 `kv_metrics.h` 移除 `IsZmqNetworkErrno(...)` 与 `<cerrno>`。
+- 网络 errno 分类 helper 下沉到 ZMQ 实现文件本地（`zmq_socket_ref.cpp` 匿名命名空间）。
+- UT 使用测试本地 helper，不再依赖 metrics 头暴露该逻辑。
+
+### 11.3 最新远端验证证据
+
+执行节点：`root@38.76.164.55`
+
+```bash
+# 1) 快速编译 ZMQ 相关核心库
+cd /root/workspace/git-repos/yuanrong-datasystem/build
+cmake --build . --target common_rpc_zmq -j8
+
+# 2) ZMQ metrics UT 回归
+./tests/ut/ds_ut --gtest_filter="ZmqMetricsTest.*" --gtest_color=no
+
+# 3) ZMQ 故障注入 ST 回归
+./tests/st/ds_st --gtest_filter="ZmqMetricsFaultTest.*" --gtest_color=no
+```
+
+关键输出摘要：
+
+```text
+[100%] Built target common_rpc_zmq
+[==========] 20 tests from 1 test suite ran.
+[  PASSED  ] 20 tests.
+[==========] 4 tests from 1 test suite ran. (6746 ms total)
+[  PASSED  ] 4 tests.
+[       OK ] ZmqMetricsFaultTest.ServerKilled_GwRecreateDetectsPeerCrash (3712 ms)
+[       OK ] ZmqMetricsFaultTest.SlowServer_ZmqCountersZeroProvesFrameworkInnocent (1508 ms)
+```
+
+结论：对齐 `!586` 后，KV/ZMQ metrics 统一初始化与命名规则生效，UT/ST 均通过，且 ST 总耗时维持在约 `6.7s`，满足 CI 侧可接受范围。
+
+---
+
+## 十二、下一步（待人工决策）
 
 1. **Init 注册入口**：当前只有 UT 层 `metrics::Init(ZMQ_METRIC_DESCS, ...)` 调用，worker 进程启动路径尚未接入。需确认统一注册点，并决定是否合并其他模块的 MetricDesc。
 2. **metrics::Start() 时机**：应在 worker/client main 的 flags 解析后调用，与 `FLAGS_log_monitor` 联动。
@@ -391,4 +541,4 @@ USE_BAZEL_VERSION=7.4.1 bazel test //tests/ut/common/rpc:zmq_metrics_test --jobs
 
 ---
 
-*档案更新时间：2026-04-16（追加 §八）；原 §一至 §六：2026-04-15*
+*档案更新时间：2026-04-16（追加 §十一并整理编号）；原 §一至 §十：2026-04-16，原 §一至 §六：2026-04-15*

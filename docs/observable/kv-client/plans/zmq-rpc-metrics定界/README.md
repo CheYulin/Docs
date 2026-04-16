@@ -6,6 +6,10 @@
 
 - `plan-zmq-rpc-metrics-定界可观测.md`  
   三层指标体系设计、metric 清单、定界场景矩阵、分阶段实施计划。
+- `ZMQ-metrics-故障注入与日志定界-测试串讲.md`  
+  测试串讲：如何构造故障、看哪些日志/metrics、常见误区与验收 Checklist。
+- `RESULTS.md`  
+  构建与 UT/ST/Bazel 验证记录；含远端复核与故障注入日志验收摘要。
 
 ## 与 URMA/TCP 计划的关系
 
