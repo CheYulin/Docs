@@ -659,3 +659,231 @@ Server:           │               │               │               │
   → 阶段①: ZMQ pipe 中排队的消息 (linger=0, 立即丢弃)
   → Server 发到旧 UUID-A 的 response
 ```
+
+---
+
+## 10. libzmq 内部重连 vs RPC 框架重建 DEALER —— 两级重连机制详解
+
+### 10.1 ZMQ socket 内部架构
+
+理解"两级重连"需要先看 ZMQ 一个 socket 内部的分层结构：
+
+```
+应用代码只看到这一层:
+┌────────────────────────────────┐
+│      zmq_socket (DEALER)       │  ← zmq_send/recv 操作的对象
+└───────────────┬────────────────┘
+                │
+                │  以下全部是 libzmq 内部自动管理, 应用不可见:
+                │
+┌───────────────▼────────────────┐
+│           session               │  ← 逻辑会话, 管理 pipe + 重连策略
+│                                 │
+│  ┌───────────────────────────┐ │
+│  │    pipe (用户态消息队列)    │ │  ← zmq_send 的消息先到这里排队
+│  └────────────┬──────────────┘ │
+│               │                 │
+│  ┌────────────▼──────────────┐ │
+│  │  engine (ZMTP 协议引擎)   │ │  ← 负责 ZMTP 分帧、握手、心跳
+│  │  ┌────────────────────┐   │ │
+│  │  │   TCP fd (fd1)     │   │ │  ← 真正的 TCP socket, 系统调用层
+│  │  └────────────────────┘   │ │
+│  └───────────────────────────┘ │
+└────────────────────────────────┘
+```
+
+### 10.2 两级重连的对比
+
+#### Level 1: libzmq 内部重连 (只换 engine + fd)
+
+```
+触发条件: libzmq 自己检测到 TCP 断开
+  - recv() 返回 0 (FIN) 或错误码
+  - ZMTP heartbeat 超时 (如果配置了)
+  - TCP keepalive 探测失败 (如果配置了)
+
+代码路径:
+  stream_engine_base::error()
+  → session_base::engine_error()
+  → clean_pipes()     // 回滚不完整多帧, 但不销毁 pipe
+  → reconnect()       // 新建 tcp_connecter, pipe 保留
+  → wait 100ms (reconnect_ivl)
+  → TCP SYN → ZMTP 握手 → 新 engine 挂到同一个 session
+
+结果:
+  zmq_socket  → 同一个 ✅
+  session     → 同一个 ✅
+  pipe        → 同一个 ✅ (里面排队的完整消息保留!)
+  routing-id  → 不变 (UUID-A) ✅ (Server 能识别是同一个 peer)
+  engine      → 旧的销毁, 新建
+  TCP fd      → 旧 fd 关闭, 新 fd 建立
+```
+
+#### Level 2: RPC 框架重建 DEALER (整个 zmq_socket 销毁重建)
+
+```
+触发条件: 应用层代码主动触发
+  - WorkerEntry 中 liveness=0 (约 12s 无响应)
+  - HandleEvent 返回 K_TRY_AGAIN (EAGAIN 直接置 liveness=0)
+
+代码路径 (zmq_stub_conn.cpp:367-384):
+  liveness_ == 0
+  → InitFrontend() 创建新 DEALER
+  → swap(frontend_, newSocket) → 旧 socket 析构
+  → zmq_close() + ZMQ_LINGER=0 → pipe 中所有消息立即丢弃
+  → close(old_fd) → TCP send buffer 丢弃
+
+结果:
+  zmq_socket  → 旧的销毁, 新建
+  session     → 旧的销毁, 新建
+  pipe        → 旧的销毁 (消息丢弃), 新建空 pipe
+  routing-id  → 变了 (UUID-A → UUID-B), Server 视为全新 peer
+  engine      → 旧的销毁, 新建
+  TCP fd      → 旧 fd 关闭, 新 fd 建立
+```
+
+#### 类比
+
+```
+libzmq 内部重连 ≈ 手机 Wi-Fi 断了自动重连同一个热点
+  → 手机还是那个手机 (zmq_socket)
+  → APP 还在运行 (session + pipe)
+  → 只是底层换了个 Wi-Fi 连接 (engine + fd)
+  → 排队没发的消息, 重连后自动发出
+
+RPC框架重建 ≈ 卸载 APP 重装
+  → 新的 APP 实例 (新 zmq_socket)
+  → 聊天记录丢了 (pipe 清空)
+  → 要重新登录 (新 routing-id)
+  → 对方看到你是一个"新用户"
+```
+
+### 10.3 各阶段数据命运对比
+
+| 数据位置 | libzmq 内部重连 | RPC 框架重建 DEALER |
+|---------|----------------|-------------------|
+| ① ZMQ pipe 中完整消息 | **存活**, 新连接上重发 | **丢弃** (linger=0) |
+| ② pipe 中不完整多帧 | **rollback** 丢弃 | **丢弃** |
+| ③ 内核 TCP send buffer | **丢失** (close old fd) | **丢失** |
+| ④ 网络 in-flight | **丢失** | **丢失** |
+| ⑤ 对端 TCP recv buffer | **安全** | **安全** |
+| ⑥ 对端 ZMQ pipe | **安全** | **安全** |
+| Server 回 response (旧连接) | **旧 pipe 清理, 丢失** | **丢失** |
+| Server 回 response (新连接) | **同 routing-id, 能路由** | **新 UUID, 收不到旧的** |
+
+### 10.4 IF Down 时哪级重连先触发？
+
+当前配置下 (无 heartbeat, 无 TCP keepalive):
+
+```
+IF Down 发生
+  │
+  │ libzmq 能检测到吗?
+  │   recv() 返回 0? → 不会, 对端发不出 FIN
+  │   TCP keepalive?  → 未配置
+  │   ZMTP heartbeat? → 未配置
+  │   → libzmq 不知道连接断了, 内部重连不触发!
+  │
+  │ RPC 框架能检测到吗?
+  │   WorkerEntry poll → 没有 POLLIN → idle
+  │   liveness-- 每 100ms 一次
+  │   120 次后 → liveness=0 → 重建 DEALER
+  │   → 约 12s 后触发
+  │
+  ▼
+  结论: 当前只走 Level 2 (RPC框架重建), Level 1 轮不到
+```
+
+如果配了 ZMTP heartbeat (`ZMQ_HEARTBEAT_IVL=500, TIMEOUT=1500`):
+
+```
+IF Down 发生
+  │
+  │ libzmq:
+  │   PING 发出 → TCP buf → 网络不通
+  │   1.5s 后 heartbeat timeout
+  │   → error(timeout_error) → 内部重连触发! (Level 1)
+  │   → pipe 保留, routing-id 不变
+  │
+  │ RPC 框架:
+  │   liveness 还剩 ~105 (才减了 15 次)
+  │   → Level 2 还没触发
+  │
+  ▼
+  结论: 配了 heartbeat 后, Level 1 先触发 (~1.5s), Level 2 不触发
+        这是更优的行为: pipe 消息不丢, 身份不变
+```
+
+### 10.5 配了 heartbeat 后的 IF Down 完整时间线
+
+```
+ 0s            1.5s          2s           5s           8s
+  │              │            │            │            │
+  │ IF Down      │            │ IF Up      │            │
+  │              │            │            │            │
+  │ ZMQ 按计划   │ 1.5s!      │            │            │
+  │ 发 PING      │ heartbeat  │            │            │
+  │ → TCP buf    │ timeout!   │            │            │
+  │ → 网络不通   │            │            │            │
+  │              │ Level 1:   │            │            │
+  │              │ engine_    │            │            │
+  │              │ error()    │            │            │
+  │              │ close(fd1) │            │            │
+  │              │ ┌─────────────────────┐ │            │
+  │              │ │ ③ TCP buf: 丢失     │ │            │
+  │              │ │ ① pipe: 保留!       │ │            │
+  │              │ │ routing-id: 不变!   │ │            │
+  │              │ └─────────────────────┘ │            │
+  │              │                         │            │
+  │              │ reconnect()             │            │
+  │              │ wait 100ms              │            │
+  │              │ TCP SYN → 失败(IF Down) │            │
+  │              │ wait ~200ms             │            │
+  │              │ TCP SYN → 失败          │ IF Up!     │
+  │              │ ...重试...              │            │
+  │              │                         │ TCP SYN ✅ │
+  │              │                         │ ZMTP握手   │
+  │              │                         │            │
+  │              │                         │ pipe 中的  │
+  │              │                         │ 消息通过   │
+  │              │                         │ fd2 发出 ✅│
+  │              │                         │            │
+  │              │                         │ Server:    │
+  │              │                         │ 同UUID-A   │
+  │              │                         │ 重新关联   │
+
+  RPC 框架层: liveness 减了几次但远没到 0, Level 2 不触发
+  应用层: 如果 RPC 超时 (3s) 在网络恢复前到期, 调用方已返回错误
+         pipe 中的 request 后来发出去了, 但 response 回来时
+         MsgQue 可能已关闭 (id 不匹配被丢弃)
+```
+
+### 10.6 两级重连的设计意义
+
+```
+为什么需要两级?
+
+Level 1 (libzmq 内部): 处理 "TCP 断了但业务还在" 的场景
+  → 快速恢复底层连接, 上层无感
+  → pipe 消息保留, 身份不变
+  → 适合短暂网络抖动
+
+Level 2 (RPC 框架): 处理 "Level 1 连不上 / 对端长时间无响应" 的场景
+  → 彻底重来, 清理所有状态
+  → 避免僵尸连接永远挂着
+  → 适合对端真的挂了的情况
+
+理想分工:
+  短故障 (秒级): TCP 重传兜底, 无重连
+  中故障 (1-10s): Level 1 内部重连, pipe 保留
+  长故障 (>12s):  Level 2 重建, 彻底放弃旧状态
+
+当前问题: Level 1 因为没配 heartbeat 而失效
+  → 短/中故障靠 TCP 重传
+  → 长故障直接跳到 Level 2 (更暴力)
+  → 缺少中间的 "温和重连" 层
+
+配了 heartbeat 后: Level 1 激活
+  → 中故障时: 内部重连, pipe 保留, 身份不变
+  → 恢复质量更高
+```
