@@ -15,6 +15,19 @@
 
 打开 [`datasystem-dev.code-workspace`](../../datasystem-dev.code-workspace) 同时加载两个根目录。
 
+## 官方关键链接（给 Agent 查阅）
+
+- 官方文档（latest）：<https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/latest/index.html>
+- 代码仓（上游镜像）：<https://gitcode.com/openeuler/yuanrong-datasystem>
+
+## 配对仓库上下文（开始任务前先看）
+
+若当前任务会查阅或修改 `yuanrong-datasystem`，请先读取：
+
+1. `../yuanrong-datasystem/.cursor/rules/repo-context.mdc`
+2. `../yuanrong-datasystem/.repo_context/README.md`、`index.md`、`maintenance.md`
+3. `../yuanrong-datasystem/.skills/`（优先复用已有 Skill，如 `ds-refresh-docs`、`ds-create-pr`）
+
 ## 2. 执行任务前的检查清单
 
 1. **定位 datasystem 根**：若脚本找不到仓库，设置 `export DATASYSTEM_ROOT=/绝对路径/yuanrong-datasystem`。  

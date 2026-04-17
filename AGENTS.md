@@ -26,6 +26,19 @@
 
 ## 请先阅读
 
+### 外部权威链接（给 Agent 查阅）
+
+- 官方文档（latest）：<https://pages.openeuler.openatom.cn/openyuanrong-datasystem/docs/zh-cn/latest/index.html>
+- 代码仓（上游镜像）：<https://gitcode.com/openeuler/yuanrong-datasystem>
+
+### 配对仓库上下文（执行任务前）
+
+当任务涉及 `yuanrong-datasystem` 行为、源码或验证时，先查看：
+
+- `../yuanrong-datasystem/.cursor/rules/repo-context.mdc`
+- `../yuanrong-datasystem/.repo_context/`（优先按 `README.md` → `index.md` → `maintenance.md` 的顺序）
+- `../yuanrong-datasystem/.skills/`（复用现有 Skill，避免重复造轮子）
+
 1. [`docs/agent/README.md`](docs/agent/README.md)  
 2. [`docs/agent/scripts-map.md`](docs/agent/scripts-map.md)（`scripts/{build,index,perf,verify}/` 何时用哪个）  
 3. [`docs/verification/手动验证确认指南.md`](docs/verification/手动验证确认指南.md)（逐步验收）  
