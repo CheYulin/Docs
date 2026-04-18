@@ -27,6 +27,7 @@
 | 04 | [04-triage-handbook.md](04-triage-handbook.md) | 定位定界手册：Trace 粒度 SOP、`grep` 模板、读/写/Init 分支表、责任域判别 | `access_recorder.cpp` / `access_point.def` |
 | 05 | [05-metrics-and-perf.md](05-metrics-and-perf.md) | 已落地的 ZMQ/KV metrics 清单（可运行时读取）+ 性能关键路径 + 采集命令 | `common/metrics/kv_metrics.{h,cpp}` / `zmq_socket_ref.cpp` |
 | 06 | [06-dependencies/](06-dependencies/README.md) | 外部/三方件依赖：URMA、OS syscall、etcd、二级存储 | — |
+| 07 | [07-pr-metrics-fault-localization.md](07-pr-metrics-fault-localization.md) | PR 串讲 (#583/#584/#586/#588) × 36 条 metric × 17 个日志标签 × 故障定界决策树，给测试/研发值班用 | `common/metrics/kv_metrics.cpp` / `zmq_socket_ref.cpp` / `urma_manager.cpp` |
 
 ## 工具与产物
 
