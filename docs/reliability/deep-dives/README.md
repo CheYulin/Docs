@@ -1,18 +1,11 @@
-# Reliability Deep Dives
+# Deep Dives
 
-本目录收纳“高信息密度但非首次必读”的专项分析，适合在以下场景按需阅读：
+这里放"高信息密度但非首次必读"的专题分析。按需阅读：
 
-- 需要追溯状态码到源码证据链；
-- 需要解释超时参数、重试行为与尾延迟；
-- 需要评估锁内 RPC/日志阻塞对稳定性的影响；
-- 需要深入 URMA/TCP/fd/共享内存链路细节。
+| 文档 | 何时看 |
+|------|--------|
+| [etcd-isolation-and-recovery.md](etcd-isolation-and-recovery.md) | Worker etcd 续约失败、被动缩容 SIGKILL、闪断误杀、`node_timeout_s` / `node_dead_timeout_s` 参数调优 |
+| [timeout-and-latency-budget.md](timeout-and-latency-budget.md) | 集群超时参数语义、5ms / 20ms 短超时下的重试行为与尾延迟 |
+| [client-lock-rpc-logging.md](client-lock-rpc-logging.md) | 客户端锁内 RPC / spdlog flush 导致 bthread 阻塞的风险治理 |
 
-当前专题：
-
-- [client-status-codes-evidence-chain.md](client-status-codes-evidence-chain.md)
-- [故障码树状梳理-URMA与TCP-fd共享内存.md](故障码树状梳理-URMA与TCP-fd共享内存.md)
-- [get-latency-timeout-sensitive-analysis-5ms-20ms.md](get-latency-timeout-sensitive-analysis-5ms-20ms.md)
-- [timeout-params-restart-vs-scale-down.md](timeout-params-restart-vs-scale-down.md)
-- [client-lock-in-rpc-logging-bthread-blocking.md](client-lock-in-rpc-logging-bthread-blocking.md)
-
-返回总索引：[`../README.md`](../README.md)。
+返回：[../README.md](../README.md)
