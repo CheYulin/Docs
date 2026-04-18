@@ -21,9 +21,15 @@
                                                          + status.error_message());
 ```
 
-**KV 读路径** 客户端侧重试集合（示例）：
+**KV 读路径** 客户端侧重试集合（`client_worker_remote_api.cpp:36-38`）：
 
-见 `docs/observable/archive/kv-client-读接口-定位定界.md` 中 `ClientWorkerRemoteApi::Get` 的 `RetryOnError` 引用（`1002`/`1001`/`19` 等）。
+```cpp
+const std::unordered_set<StatusCode> RETRY_ERROR_CODE{
+    K_TRY_AGAIN, K_RPC_CANCELLED, K_RPC_DEADLINE_EXCEEDED,
+    K_RPC_UNAVAILABLE, K_OUT_OF_MEMORY };
+```
+
+完整重试策略与 `last_rc` 语义见 [`../02-call-chain-and-syscalls.md § 8`](../02-call-chain-and-syscalls.md) 与 [`../../reliability/04-fault-tree.md § 2`](../../reliability/04-fault-tree.md)。
 
 ## 3. 评审注意
 

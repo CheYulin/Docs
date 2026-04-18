@@ -6,7 +6,7 @@
 
 在本载体仓库与配对 datasystem 上工作时，宜同时具备：**架构合理性**（边界与依赖）、**设计与语义细节**（接口与观测）、**Code Review**、**用户易用性**、**测试与性能验证**。根目录 [`README.md`](../../README.md) 有对照表；重复流程建议做成 **Cursor Skill**（见 [`.cursor/skills/feature-tree-to-docs/SKILL.md`](../../.cursor/skills/feature-tree-to-docs/SKILL.md)）。
 
-**Excel**：可复现表格优先用脚本生成，见 [`docs/observable/kv-client/README.md`](../observable/kv-client/README.md) 与 [`docs/observable/workbook/kv-client/README.md`](../observable/workbook/kv-client/README.md)；新脚本放 [`scripts/`](../../scripts/README.md)。**PPT**：历史材料见 [`docs/observable/archive/README.md`](../observable/archive/README.md)。
+**Excel**：可复现表格优先用脚本生成，见 [`docs/observable/workbook/README.md`](../observable/workbook/README.md)（命令 `./ops docs.kv_observability_xlsx`）；新脚本放 [`scripts/`](../../scripts/README.md)。
 
 ## 1. 仓库分工（必读）
 
@@ -47,8 +47,9 @@
 | [`docs/verification/cmake-non-bazel.md`](../verification/cmake-non-bazel.md) | build、perf、coverage、executor、锁、examples 命令速查 |
 | [`scripts/README.md`](../../scripts/README.md) | 脚本子目录说明、`lib/` 解析、`scripts-map` 链接 |
 | [`plans/agent开发载体_vibe与yuanrong分工.plan.md`](../../plans/agent开发载体_vibe与yuanrong分工.plan.md) | 分工与脚本总表 |
-| [`docs/reliability/00-kv-client-fema-index.md`](../reliability/00-kv-client-fema-index.md) | 客户侧 FEMA / 故障模式清单 / 读写路径；运维见 [`docs/reliability/operations/`](../reliability/operations/) |
-| [`docs/reliability/00-kv-client-visible-status-codes.md`](../reliability/00-kv-client-visible-status-codes.md) | 跑测时审视 **Client `StatusCode`**、grep 建议、`results/` 抽样模板 |
+| [`docs/reliability/README.md`](../reliability/README.md) | 可靠性主线：架构、故障模式、故障树、可靠性设计、运维 playbook |
+| [`docs/reliability/03-status-codes.md`](../reliability/03-status-codes.md) | Client `StatusCode` 全表 + L0-L5 分层映射 |
+| [`docs/observable/README.md`](../observable/README.md) | 可观测与定位定界主线：调用链、故障模式库、triage 手册、metrics |
 | [`tech-research/README.md`](../../tech-research/README.md) | 第三方库技术调研（如 brpc、bpftrace 方法论） |
 | [`docs/feature-tree/openyuanrong-data-system-feature-tree.md`](../feature-tree/openyuanrong-data-system-feature-tree.md) | **产品特性树**（openYuanrong / yuanrong-datasystem 能力矩阵；表头说明 + 同目录 `.xlsx`） |
 | [`workspace/README.md`](../../workspace/README.md) | bpftrace/perf/strace **默认产物根**（`workspace/observability/`） |

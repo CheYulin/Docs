@@ -49,7 +49,7 @@ mkdir -p "$RUN"
 
 ## Client 故障与错误码（跑大批量用例时）
 
-审视 **client 侧可能出现的故障与 `StatusCode`**、以及在日志里怎么 grep、如何把新 case 记进本目录：见 [`docs/reliability/00-kv-client-visible-status-codes.md`](../docs/reliability/00-kv-client-visible-status-codes.md)。建议在每次全量或夜间跑测目录下按需增加 **`CLIENT_FAULT_OBSERVATIONS.md`**（文内模板）。
+审视 **client 侧可能出现的故障与 `StatusCode`**：见 [`docs/reliability/03-status-codes.md`](../docs/reliability/03-status-codes.md)；日志 grep 与 Trace 粒度定位见 [`docs/observable/04-triage-handbook.md`](../docs/observable/04-triage-handbook.md)。建议在每次全量或夜间跑测目录下按需增加 **`CLIENT_FAULT_OBSERVATIONS.md`**。
 
 ## 与文档的对应关系
 

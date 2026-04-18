@@ -3,8 +3,8 @@
 Build a static HTML preview: PlantUML (SVG) + StatusCode markdown + Excel Sheet1 table.
 
 Usage (from repo root or any cwd):
-  pip install -r scripts/observable/kv-client-excel/preview/requirements-preview.txt
-  python3 scripts/observable/kv-client-excel/preview/build_preview.py
+  pip install -r scripts/documentation/observable/kv-client-excel/preview/requirements-preview.txt
+  python3 scripts/documentation/observable/kv-client-excel/preview/build_preview.py
 
 Requires Java + plantuml.jar (set PLANTUML_JAR or uses /tmp/plantuml.jar if present).
 Open preview/dist/index.html in a browser (file:// is OK for local preview).
@@ -25,13 +25,13 @@ PREVIEW_DIR = Path(__file__).resolve().parent
 TOOL_DIR = PREVIEW_DIR.parent
 DIST_DIR = PREVIEW_DIR / "dist"
 DIAGRAM_DIR = DIST_DIR / "diagrams"
-REPO_ROOT = TOOL_DIR.parents[2]
-DOC_KV_CLIENT_DIR = REPO_ROOT / "docs" / "observable" / "kv-client"
-DOC_WORKBOOK_DIR = REPO_ROOT / "docs" / "observable" / "workbook" / "kv-client"
+REPO_ROOT = TOOL_DIR.parents[3]
+DOC_OBSERVABLE_DIR = REPO_ROOT / "docs" / "observable"
+DOC_WORKBOOK_DIR = DOC_OBSERVABLE_DIR / "workbook"
 
 XLSX_PATH = DOC_WORKBOOK_DIR / "kv-client-观测-调用链与URMA-TCP.xlsx"
-STATUS_CODES_MD = REPO_ROOT / "docs" / "reliability" / "00-kv-client-visible-status-codes.md"
-PUML_DIR = DOC_KV_CLIENT_DIR / "puml"
+STATUS_CODES_MD = REPO_ROOT / "docs" / "reliability" / "03-status-codes.md"
+PUML_DIR = DOC_OBSERVABLE_DIR / "diagrams"
 PLANTUML_JAR_CANDIDATES = [
     Path(os.environ.get("PLANTUML_JAR", "")) if os.environ.get("PLANTUML_JAR") else None,
     Path("/tmp/plantuml.jar"),
@@ -116,7 +116,7 @@ def sheet1_to_html_rows() -> tuple[str, str]:
         return (
             "Excel Sheet1",
             f"<p class=\"warn\">未找到工作簿: <code>{html.escape(str(XLSX_PATH))}</code>。<br>"
-            "请先运行 <code>scripts/observable/kv-client-excel/generate_kv_client_observability_xlsx.py</code> 生成 xlsx（写入 <code>docs/observable/workbook/kv-client/</code>）。</p>",
+            "请先运行 <code>scripts/documentation/observable/kv-client-excel/generate_kv_client_observability_xlsx.py</code> 生成 xlsx（写入 <code>docs/observable/workbook/</code>）。</p>",
         )
 
     wb = load_workbook(XLSX_PATH, read_only=True, data_only=True)
@@ -295,7 +295,7 @@ def build_index(diagrams: list[tuple[str, str]], sheet_title: str, sheet_html: s
 
   <section id="status-codes">
     <h2>关键错误码文档</h2>
-    <p class="muted" style="color:var(--muted);font-size:0.9rem;">来源: <code>docs/reliability/00-kv-client-visible-status-codes.md</code></p>
+    <p class="muted" style="color:var(--muted);font-size:0.9rem;">来源: <code>docs/reliability/03-status-codes.md</code></p>
     <div class="markdown-body">{body_html}</div>
   </section>
 

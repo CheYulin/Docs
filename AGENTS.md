@@ -21,7 +21,7 @@
 
 ## Excel / PPT
 
-- **Excel**：表格类交付优先脚本生成；见 [`docs/observable/kv-client/README.md`](docs/observable/kv-client/README.md) 与 [`docs/observable/workbook/kv-client/README.md`](docs/observable/workbook/kv-client/README.md)，新脚本优先放 **`scripts/`**。  
+- **Excel**：表格类交付优先脚本生成；见 [`docs/observable/workbook/README.md`](docs/observable/workbook/README.md)（`./ops docs.kv_observability_xlsx`），新脚本优先放 **`scripts/`**。  
 - **PPT**：以 `docs/observable/*ppt*`、`ppt.md` 等 Markdown 素材为主；自动化导出可再加 `scripts/` 工具。
 
 ## 请先阅读

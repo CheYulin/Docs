@@ -2,61 +2,77 @@
 
 路径相对于本仓库根目录 `vibe-coding-files/`。
 
+## 主目录
+
 | 区域 | 用途 |
 |------|------|
 | [**agent/**](agent/) | **指导 Agent**：仓库分工、[`scripts-map.md`](agent/scripts-map.md)（`scripts/` 分类）、检查清单 |
 | [architecture/](architecture/) | 4+1 视图与可选 ADR |
 | [flows/](flows/) | 序列图与流程叙事 |
-| [reliability/](reliability/) | 不变量与失败模式；**KV Client FEMA（`00-kv-client-fema-*.md`）**；[`00-kv-client-visible-status-codes.md`](reliability/00-kv-client-visible-status-codes.md)（**跑测时 Client 故障与 StatusCode**）；[deep-dives/client-status-codes-evidence-chain.md](reliability/deep-dives/client-status-codes-evidence-chain.md)；[operations/](reliability/operations/) 运维长文 |
+| [**reliability/**](reliability/) | **KV Client 可靠性**：架构、故障模式、StatusCode 分层、故障树、可靠性设计、运维 playbook |
+| [**observable/**](observable/) | **可观测与定位定界**：调用链、故障模式库、triage 手册、metrics、外部依赖（URMA / OS / etcd / 二级存储） |
 | [verification/](verification/) | **构建、测试、perf、覆盖率、examples**；[手动验证确认指南](verification/手动验证确认指南.md)；[构建产物目录与可复现工作流](verification/构建产物目录与可复现工作流.md) |
-| [**用户手册.md**](用户手册.md) | **端到端上手**：环境要求、pip/源码、`build.sh`、测试、`dscli`/ETCD/进程与 K8s 摘要；细节链官方入门 |
-| [results/](../results/) | **本地验证输出目录**（命令与 `tee` 日志；除 `README.md` 外不入库，见该目录说明） |
-| [feature-tree/](feature-tree/) | **特性树**：[openYuanrong Data System 特性树（Agent）](feature-tree/openyuanrong-data-system-feature-tree.md)；官方案例索引见该目录 |
-| [observable/](observable/) | 定位定界总纲与专题；**KV Client 主入口**：[kv-client/README.md](observable/kv-client/README.md) · **工作簿包**：[workbook/kv-client/README.md](observable/workbook/kv-client/README.md) · **分层索引**：[kv-client/文档索引.md](observable/kv-client/文档索引.md) · **历史归档**：[archive/README.md](observable/archive/README.md) |
+| [**用户手册.md**](用户手册.md) | **端到端上手**：环境要求、pip / 源码、`build.sh`、测试、`dscli` / ETCD / 进程与 K8s 摘要 |
+| [feature-tree/](feature-tree/) | **特性树**：[openYuanrong Data System 特性树](feature-tree/openyuanrong-data-system-feature-tree.md)；官方案例索引 |
 
-仓库根下另有 **[`tech-research/`](../tech-research/README.md)**（第三方与库的技术调研）与 **[`workspace/`](../workspace/README.md)**（bpftrace/perf/strace 等**可复现产物**，默认输出目录）。
+仓库根下另有：
+- **[`../rfc/`](../rfc/README.md)**：特性开发 RFC（设计 / 验证 / PR 文案）
+- **[`../plans/`](../plans/README.md)**：短周期开发计划（与 rfc 规划合并中）
+- **[`../results/`](../results/README.md)**：本地验证输出目录
+- **[`../tech-research/`](../tech-research/README.md)**：第三方与库的技术调研
+- **[`../workspace/`](../workspace/README.md)**：bpftrace / perf / strace 等可复现产物
 
-### 从 `plans/` 迁入的参考稿
+## KV Client 主线
 
-以下文稿已按主题落在 `docs/`，**不再**以 `plans/*.plan.md` 维护；顶层仍在 `plans/` 持续迭代的执行项见 [`plans/README.md`](../plans/README.md)。
+### 可靠性（`docs/reliability/`）
+
+| 序号 | 文档 | 主题 |
+|-----|------|------|
+| 01 | [01-architecture-and-paths.md](reliability/01-architecture-and-paths.md) | 架构 + 正常 / 切流读写路径 6 步 |
+| 02 | [02-failure-modes-and-sli.md](reliability/02-failure-modes-and-sli.md) | 业务流程 × 故障模式 53 + 时间量级 + 2/N SLI |
+| 03 | [03-status-codes.md](reliability/03-status-codes.md) | StatusCode 全表 + L0-L5 分层 |
+| 04 | [04-fault-tree.md](reliability/04-fault-tree.md) | 错误码 → 根因故障树（6 大类）+ 源码证据 |
+| 04a | [04a-fault-tree-by-interface.md](reliability/04a-fault-tree-by-interface.md) | Init / MCreate / MSet / MGet 接口级故障树 |
+| 05 | [05-reliability-design.md](reliability/05-reliability-design.md) | 通信 / 组件 / etcd 可靠性方案 + 不变量 |
+| 06 | [06-playbook.md](reliability/06-playbook.md) | 运维排障：部署 / 扩缩容、1002 三元化、31/32 可见性、`resource.log` |
+| R | [references.md](reliability/references.md) | openYuanrong 官方入口、DryRun 模板 |
+| D | [deep-dives/](reliability/deep-dives/) | etcd 隔离与恢复、超时与时延预算、client 锁内 RPC |
+
+### 可观测（`docs/observable/`）
+
+| 序号 | 文档 | 主题 |
+|-----|------|------|
+| 01 | [01-architecture.md](observable/01-architecture.md) | 可观测架构：应用日志 / access log / metrics / Trace |
+| 02 | [02-call-chain-and-syscalls.md](observable/02-call-chain-and-syscalls.md) | Init / MCreate / MSet / MGet 调用链 + OS/URMA 接口清单 |
+| 03 | [03-fault-mode-library.md](observable/03-fault-mode-library.md) | FM-001..023 故障模式库 + 日志关键字 + URMA/OS 互斥定界 |
+| 04 | [04-triage-handbook.md](observable/04-triage-handbook.md) | 定位定界手册：Trace × 分支 × 责任域（研发 / 测试 / 客户）|
+| 05 | [05-metrics-and-perf.md](observable/05-metrics-and-perf.md) | ZMQ / KV metrics 清单 + 性能关键路径 + 采集命令 |
+| 06 | [06-dependencies/](observable/06-dependencies/README.md) | 外部依赖：URMA / OS syscall / etcd / 二级存储 |
+| — | [diagrams/](observable/diagrams/) | 总图 + 分图 + 步骤图（PlantUML）|
+| — | [workbook/](observable/workbook/) | Excel 工作簿 + Sheet1/2/3 Markdown 对照 |
+
+### reliability vs observable 分工
+
+- **reliability**：错误码 → 根因（代码证据）、故障处理方案、SLI、运维剧本
+- **observable**：调用链 → 现象 → 证据 → 归因，定位定界 SOP
+- 两边通过错误码与 FM 编号对齐，交叉引用不重复。
+
+## 其它主题
 
 | 文稿 | 路径 |
 |------|------|
 | dsbench 安装 / 部署 / 运行 / 观测 | [flows/narratives/dsbench-install-deploy-run-observe.md](flows/narratives/dsbench-install-deploy-run-observe.md) |
 | Remote Get（UB/URMA）流程梳理 | [flows/narratives/remote-get-ub-urma-flow.md](flows/narratives/remote-get-ub-urma-flow.md) |
-| RemoteGet TCP 回切、URMA 重试与 poll/jfc 时延（20ms） | [flows/narratives/remote-get-tcp-fallback-urma-retry-polljfc.md](flows/narratives/remote-get-tcp-fallback-urma-retry-polljfc.md) |
-| Client–Worker–Master 重试与故障处理总结 | [flows/narratives/client-worker-master-retry-fault-handling.md](flows/narratives/client-worker-master-retry-fault-handling.md) |
-| Get 时延敏感场景（5ms / 20ms）分析 | [reliability/deep-dives/get-latency-timeout-sensitive-analysis-5ms-20ms.md](reliability/deep-dives/get-latency-timeout-sensitive-analysis-5ms-20ms.md) |
-| 超时参数与重启 / 缩容分歧 | [reliability/deep-dives/timeout-params-restart-vs-scale-down.md](reliability/deep-dives/timeout-params-restart-vs-scale-down.md) |
-| Client 锁内日志与 RPC / bthread 阻塞风险治理（总览） | [reliability/deep-dives/client-lock-in-rpc-logging-bthread-blocking.md](reliability/deep-dives/client-lock-in-rpc-logging-bthread-blocking.md) |
-| 原地重启 vs 被动缩容（设计取舍） | [architecture/decisions/restart-vs-passive-scale-down.md](architecture/decisions/restart-vs-passive-scale-down.md) |
-
-### KV Client FEMA 与运维（由 `plans/kv_client_triage/cases.md` 拆分）
-
-| 说明 | 路径 |
-|------|------|
-| **总入口（必读）** | [reliability/00-kv-client-fema-index.md](reliability/00-kv-client-fema-index.md) |
-| 业务场景与故障模式表 | [reliability/00-kv-client-fema-scenarios-failure-modes.md](reliability/00-kv-client-fema-scenarios-failure-modes.md) |
-| 读写路径与可靠性设计 | [reliability/00-kv-client-fema-read-paths-reliability.md](reliability/00-kv-client-fema-read-paths-reliability.md) |
-| 时间指标与 2/N 粗算 | [reliability/00-kv-client-fema-timing-and-sli.md](reliability/00-kv-client-fema-timing-and-sli.md) |
-| DryRun 远端读样例 | [reliability/00-kv-client-fema-dryrun-remote-read.md](reliability/00-kv-client-fema-dryrun-remote-read.md) |
-| 运维部署与扩缩容（历史摘要） | [reliability/archive/2026-04/00-kv-client-fema-ops-deploy-scaling.md](reliability/archive/2026-04/00-kv-client-fema-ops-deploy-scaling.md) |
-| 读写 PlantUML | [flows/sequences/kv-client/](flows/sequences/kv-client/) |
-| 故障处理 PlantUML | [reliability/diagrams/kv-client/](reliability/diagrams/kv-client/) |
-| 运维长文（L0–L5、resource.log、31/32、1002） | [reliability/operations/](reliability/operations/) |
-| openYuanrong 官方（安装/部署/日志/接口示意） | [reliability/00-reference-openyuanrong-official.md](reliability/00-reference-openyuanrong-official.md) |
-| 官方案例索引（后续特性树） | [feature-tree/openyuanrong-official-case-examples-index.md](feature-tree/openyuanrong-official-case-examples-index.md) |
+| RemoteGet TCP 回切、URMA 重试与 poll/jfc 时延 | [flows/narratives/remote-get-tcp-fallback-urma-retry-polljfc.md](flows/narratives/remote-get-tcp-fallback-urma-retry-polljfc.md) |
+| Client–Worker–Master 重试与故障处理 | [flows/narratives/client-worker-master-retry-fault-handling.md](flows/narratives/client-worker-master-retry-fault-handling.md) |
+| 原地重启 vs 被动缩容（设计取舍）| [architecture/decisions/restart-vs-passive-scale-down.md](architecture/decisions/restart-vs-passive-scale-down.md) |
 
 ## 代码在哪
 
-**yuanrong-datasystem** 为同级 Git 仓库（例如 `../yuanrong-datasystem/`）。建议打开 [`datasystem-dev.code-workspace`](../datasystem-dev.code-workspace)。
+**yuanrong-datasystem** 为同级 Git 仓库（`../yuanrong-datasystem/`）。建议打开 [`datasystem-dev.code-workspace`](../datasystem-dev.code-workspace)。
 
 ## Agent 入口
 
-1. [`agent/README.md`](agent/README.md)  
-2. [`verification/cmake-non-bazel.md`](verification/cmake-non-bazel.md)  
-3. [`plans/agent开发载体_vibe与yuanrong分工.plan.md`](../plans/agent开发载体_vibe与yuanrong分工.plan.md)
-
-## 计划文稿
-
-内部计划与大型分析目录树：[`../plans/`](../plans/)。顶层 **执行中** 的 `.plan.md` 目前为 **`urma_ub_索引脚本使用说明.plan.md`**（URMA/UB IDE 索引脚本）与 **`agent开发载体_vibe与yuanrong分工.plan.md`**（仓库分工）；其余已沉淀文稿见上表。
+1. [`agent/README.md`](agent/README.md)
+2. [`verification/cmake-non-bazel.md`](verification/cmake-non-bazel.md)
+3. [`../plans/agent开发载体_vibe与yuanrong分工.plan.md`](../plans/agent开发载体_vibe与yuanrong分工.plan.md)

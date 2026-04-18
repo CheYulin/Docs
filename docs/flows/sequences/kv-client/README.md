@@ -1,6 +1,6 @@
 # KV Client 序列图与拓扑（PlantUML）
 
-与 **`docs/reliability/00-kv-client-fema-*.md`** 中「关键读写路径」及 [`plans/kv_client_triage/`](../../../../plans/kv_client_triage/) 叙事一致。使用 [PlantUML](https://plantuml.com/) 渲染。
+与 [`docs/reliability/01-architecture-and-paths.md`](../../../reliability/01-architecture-and-paths.md) 中「关键读写路径」及 [`docs/observable/02-call-chain-and-syscalls.md`](../../../observable/02-call-chain-and-syscalls.md) 调用链一致。使用 [PlantUML](https://plantuml.com/) 渲染。
 
 | 文件 | 说明 |
 |------|------|
@@ -12,6 +12,6 @@
 | [kv_client_deploy_interaction.puml](kv_client_deploy_interaction.puml) | 业务/SDK、Worker、etcd 控制面 |
 | [scaling_scale_down_sequences.puml](scaling_scale_down_sequences.puml) | K_SCALING / K_SCALE_DOWN 时序（与 operations 长文一致） |
 
-**故障处理类配图**（UB/etcd/SDK 等）见 [`../../reliability/diagrams/kv-client/`](../../reliability/diagrams/kv-client/)。
+**故障处理类配图**（UB/etcd/SDK 等）见 [`../../reliability/diagrams/`](../../reliability/diagrams/)。
 
 **故障现象 / 责任边界 / 数据系统内模块**（与上表时序图对照）：[`../../observable/kv-场景-故障分类与责任边界.md`](../../observable/kv-场景-故障分类与责任边界.md)。

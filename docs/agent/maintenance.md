@@ -31,7 +31,7 @@
 
 ## 修改可靠性 / FEMA 文档
 
-1. 修改 [`docs/reliability/`](../reliability/) 下任何文件后，检查 [`00-kv-client-fema-index.md`](../reliability/00-kv-client-fema-index.md) 索引仍完整。
+1. 修改 [`docs/reliability/`](../reliability/) 下任何文件后，检查 [`README.md`](../reliability/README.md) 索引中的对应条目仍完整。
 2. 新增故障模式须同时更新 FEMA 索引与 StatusCode 文档（如有新增码点）。
 
 ## 定期检查

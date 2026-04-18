@@ -6,8 +6,8 @@
 >   - **`【故障预期】可失败（本行专述异常或边界条件）`**：缺省语义——本行聚焦 **异常/边界**，与主路径行对照阅读即可定界。  
 > - **正向（调用树）**：与下面 **§1 思维导图**、**§2.1 / §2.2 按层表**、**步骤 2/3 PlantUML** 同一语义；主路径行中的 **`→W2` / `→W3@address`** 与 §1.5 文字树一致。  
 > - **逆向（定界流程图）**：排障时 **不要**指望在 Sheet1 把树倒着读；应 **先 Status/日志 → Trace 检索 → 对照 `Sheet5_定界-case`**（或与 Sheet1 某行匹配），与总图 PlantUML「先错误码+手册再 Trace」一致。详见同目录 [`README.md`](README.md) 中 **「正向分析 vs 逆向分析」**。  
-> - **Sheet1 第 5～8 列（URMA / OS）**：由生成脚本从 [`../../../../scripts/observable/kv-client-excel/sheet1_system_presets.py`](../../../../scripts/observable/kv-client-excel/sheet1_system_presets.py) 逐行写入 **具体接口**（`ds_urma_*` / UMDK 与 `syscall` / `libzmq`）及 **可 grep 的日志原文、Status、步骤**。**URMA「错误」列与 OS「错误」列互斥**（`merge_exclusive`）：一行在 syscall 传输层只按 **一类** 根因排查；`NEITHER` 行为/参数类行两列可为 `—`。  
-> - **维护规则**：`CHAIN_ROWS` 与 `SHEET1_URMA_OS` **必须同长度、同顺序**（脚本内有 `assert`）；增删调用链行时两处一起改，再运行 `scripts/observable/kv-client-excel/generate_kv_client_observability_xlsx.py`。  
+> - **Sheet1 第 5～8 列（URMA / OS）**：由生成脚本从 [`../../../../scripts/documentation/observable/kv-client-excel/sheet1_system_presets.py`](../../../../scripts/documentation/observable/kv-client-excel/sheet1_system_presets.py) 逐行写入 **具体接口**（`ds_urma_*` / UMDK 与 `syscall` / `libzmq`）及 **可 grep 的日志原文、Status、步骤**。**URMA「错误」列与 OS「错误」列互斥**（`merge_exclusive`）：一行在 syscall 传输层只按 **一类** 根因排查；`NEITHER` 行为/参数类行两列可为 `—`。  
+> - **维护规则**：`CHAIN_ROWS` 与 `SHEET1_URMA_OS` **必须同长度、同顺序**（脚本内有 `assert`）；增删调用链行时两处一起改，再运行 `scripts/documentation/observable/kv-client-excel/generate_kv_client_observability_xlsx.py`。  
 > - 本页 **§2.1** 另含 Markdown 评审用的 **Init 分层表**（与 Excel 第 5～8 列互补对照）。
 
 **仓库**：`yuanrong-datasystem`（附录中的路径均相对该仓库根）  

@@ -1,15 +1,43 @@
-# Observable 文档入口
+# KV Client 可观测文档
 
-`docs/observable/` 采用“精选 + 深潜 + 归档”分层，避免目录混杂。
+本目录面向 **研发、测试、值班** 的可观测与定位定界。骨架：**调用链 → 埋点 → 现象 → 证据 → 归因**，所有内容锚定 `yuanrong-datasystem` 源码。
 
-## 入口
+## 与 `docs/reliability/` 的分工
 
-- **KV Client 主入口**：[`kv-client/README.md`](./kv-client/README.md)
-- **分层索引（L1/L2）**：[`kv-client/文档索引.md`](./kv-client/文档索引.md)
-- **历史归档**：[`archive/README.md`](./archive/README.md)
+| 维度 | `docs/reliability/` | `docs/observable/`（本目录） |
+|------|---------------------|------------------------------|
+| 关注点 | **故障处理方案、SLI、错误码分层、运维排障剧本** | **如何看到故障**：调用链、埋点、日志、Trace、metrics；**客户/研发定位手册** |
+| 核心骨架 | 错误码 → 根因（代码证据） | 调用链 → 现象 → 证据 → 归因 |
+| 示例 | "1002 桶码有哪些子类、各自代码证据" | "看 `access log` 第一列 + `respMsg` 关键词，从现象回溯到哪段代码" |
 
-## 约定
+交叉引用（不复述）：
+- 本目录提到错误码语义 → 跳 `../reliability/03-status-codes.md` / `04-fault-tree.md`
+- 本目录涉及外部依赖状态机 → 跳 `../reliability/deep-dives/`（如 etcd 隔离与恢复）
+- `reliability/` 提到客户端 access log / resource.log → 跳本目录对应章节
 
-- `docs/` 仅保留精选和当前维护文档
-- 生成与预览优先使用仓库根统一入口：`./ops docs.kv_observability_xlsx`、`./ops docs.kv_observability_preview`
-- 若新增专题，先在对应子目录 `README` 与索引登记再发布
+---
+
+## 阅读顺序
+
+| 序号 | 文档 | 主题 | 对应代码 |
+|-----|------|------|---------|
+| 01 | [01-architecture.md](01-architecture.md) | 可观测架构：应用日志 / access log / resource.log / metrics / Trace / PerfPoint 全景 | `common/log/` / `common/metrics/` |
+| 02 | [02-call-chain-and-syscalls.md](02-call-chain-and-syscalls.md) | Init / MCreate / MSet / MGet 完整调用链 + OS/URMA 接口全量清单 | `kv_client.cpp` / `object_client_impl.cpp` / `urma_manager.cpp` |
+| 03 | [03-fault-mode-library.md](03-fault-mode-library.md) | FM-001..023 故障模式库 + 日志关键字 + URMA/OS 互斥定界 + Get 路径错误矩阵 | `sheet1_system_presets.py`（脚本） |
+| 04 | [04-triage-handbook.md](04-triage-handbook.md) | 定位定界手册：Trace 粒度 SOP、`grep` 模板、读/写/Init 分支表、责任域判别 | `access_recorder.cpp` / `access_point.def` |
+| 05 | [05-metrics-and-perf.md](05-metrics-and-perf.md) | 已落地的 ZMQ/KV metrics 清单（可运行时读取）+ 性能关键路径 + 采集命令 | `common/metrics/kv_metrics.{h,cpp}` / `zmq_socket_ref.cpp` |
+| 06 | [06-dependencies/](06-dependencies/README.md) | 外部/三方件依赖：URMA、OS syscall、etcd、二级存储 | — |
+
+## 工具与产物
+
+| 文件 | 说明 |
+|------|------|
+| [diagrams/README.md](diagrams/README.md) | PlantUML 总图 + 分图（triage + 步骤图） |
+| [workbook/README.md](workbook/README.md) | Excel 工作簿 + Sheet1/2/3 Markdown 对照稿（命令 `./ops docs.kv_observability_xlsx`） |
+
+## 维护约定
+
+1. **对齐代码**：每篇顶部列出对应 `yuanrong-datasystem` 源码文件；代码变更后同步更新。
+2. **不重复**：每个主题只在一处展开，其它文档引用即可。
+3. **RFC 分离**：特性开发任务（设计、验证、PR 文案）放 `../../rfc/`，本目录仅留稳定文档。
+4. **与 reliability 自洽**：交叉引用而非复述；两边的 StatusCode 表必须一致。

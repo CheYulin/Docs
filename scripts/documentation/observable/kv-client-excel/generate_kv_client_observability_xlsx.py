@@ -12,7 +12,7 @@ from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-OUT = REPO_ROOT / "docs" / "observable" / "workbook" / "kv-client" / "kv-client-观测-调用链与URMA-TCP.xlsx"
+OUT = REPO_ROOT / "docs" / "observable" / "workbook" / "kv-client-观测-调用链与URMA-TCP.xlsx"
 SOURCE_ROOT = Path("/home/t14s/workspace/git-repos/yuanrong-datasystem")
 
 # 责任归属取值约定：用户参数 | OS | URMA | 数据系统逻辑 | RPC框架

@@ -42,7 +42,7 @@ STATUS_DRILLDOWN = [
         "是否参数/batch/地址配置错误？",
         "Invalid|CheckFail|Validate",
         "—",
-        "docs/observable/workbook/kv-client/kv-client-Sheet1-调用链-错误与日志.md",
+        "docs/observable/workbook/sheet1-call-chain.md",
     ],
     [
         "3",
@@ -50,7 +50,7 @@ STATUS_DRILLDOWN = [
         "key 是否真存在？TTL？",
         "NOT_FOUND|Key not found",
         "—",
-        "docs/observable/kv-client-Get路径-树状错误矩阵.md",
+        "docs/observable/03-fault-mode-library.md",
     ],
     [
         "5",
@@ -114,7 +114,7 @@ STATUS_DRILLDOWN = [
         "Worker 是否重启/网络断？",
         "Disconnected|reconnect|heartbeat",
         "重连后 URMA 需重建",
-        "docs/observable/workbook/kv-client/kv-client-Sheet3-TCP-RPC对照.md",
+        "docs/observable/workbook/sheet3-tcp-rpc.md",
     ],
     [
         "25",
@@ -146,7 +146,7 @@ STATUS_DRILLDOWN = [
         "对端不可达？连接数？",
         "unavailable|channel",
         "—",
-        "docs/observable/workbook/kv-client/kv-client-Sheet3-TCP-RPC对照.md",
+        "docs/observable/workbook/sheet3-tcp-rpc.md",
     ],
     [
         "1004",
@@ -295,7 +295,7 @@ def main() -> int:
         "  - 傻瓜步骤: 一线按表操作顺序",
         "  - Mermaid_流程图源码: 粘贴到支持 Mermaid 的编辑器预览",
         "",
-        "URMA 检测原则: 必须使用与业务日志相同的 TraceID 关联检索 URMA 相关行（见 observable/kv-client + workbook/kv-client）",
+        "URMA 检测原则: 必须使用与业务日志相同的 TraceID 关联检索 URMA 相关行（见 observable/06-dependencies/urma.md + workbook/sheet2-urma-capi.md）",
         "",
         "权威 StatusCode: yuanrong-datasystem include/datasystem/utils/status.h + status_code.def",
     ]

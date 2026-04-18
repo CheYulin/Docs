@@ -79,7 +79,7 @@ bash build.sh -c html -t run_cpp -l 'st*'
 bash "$VIBE/ops" test.brpc_kv_executor --build-dir "$DS/build" --coverage-html
 ```
 
-**分支覆盖率含义与报告阅读方式**：优先看 CI 产出的 coverage HTML（`build.sh` 已使用 `lcov_branch_coverage=1`）；历史流程稿见 [`docs/observable/archive/分支覆盖率与定位定界-流程指南.md`](../observable/archive/分支覆盖率与定位定界-流程指南.md)。
+**分支覆盖率含义与报告阅读方式**：优先看 CI 产出的 coverage HTML（`build.sh` 已使用 `lcov_branch_coverage=1`）。
 
 ---
 

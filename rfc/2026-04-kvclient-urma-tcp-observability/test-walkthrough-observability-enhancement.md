@@ -4,7 +4,7 @@
 **目标**：在监控侧已识别 **Status code、接口、时延** 的前提下，能用 **§3.1** 的流程把问题缩到 **客户端 / Worker / ZMQ 传输** 等层次；并结合 **§2** 日志与 **§3.2** 指标区分 **ZMQ/TCP 控制面** vs **URMA 数据面** vs **`K_RPC_UNAVAILABLE`(1002) 子类**，避免误判。
 
 **关联 PR（GitCode）**：[!583](https://gitcode.com/openeuler/yuanrong-datasystem/pull/583)、[!584](https://gitcode.com/openeuler/yuanrong-datasystem/pull/584)、[!586](https://gitcode.com/openeuler/yuanrong-datasystem/pull/586)、[!588](https://gitcode.com/openeuler/yuanrong-datasystem/pull/588)  
-**详细计划**：`docs/observable/kv-client/plans/zmq-rpc-metrics定界/`、`docs/observable/kv-client/plans/urma-tcp-定界修复需求/`
+**详细计划**：`../2026-04-zmq-rpc-metrics/`、`./`
 
 ---
 
@@ -374,7 +374,7 @@ bash scripts/testing/verify/validate_urma_tcp_observability_logs.sh /path/to/log
 
 脚本要求（面向**已采集含故障的**联调日志）：命中 `URMA_NEED_CONNECT` + `remoteAddress=`、`URMA_POLL_ERROR`、`URMA_RECREATE_JFS*` 至少一类，且 **1002 子类前缀至少 3 种**。若现场日志不满足（例如无 URMA 故障），脚本会失败 —— 此时用 §4.2/4.3 **手工 grep** 分项验收即可。
 
-URMA 环境专项验证步骤见：`docs/observable/kv-client/plans/urma-tcp-定界修复需求/kv-client-URMA环境验证执行清单.md`。
+URMA 环境专项验证步骤见：`./env-validation.md`。
 
 ---
 
@@ -405,8 +405,8 @@ URMA 环境专项验证步骤见：`docs/observable/kv-client/plans/urma-tcp-定
 | `yuanrong-datasystem/src/datasystem/common/rpc/zmq/zmq_monitor.cpp` | `zmq_event_disconnect_total`、`zmq_event_handshake_failure_total` |
 | `yuanrong-datasystem/src/datasystem/common/rdma/urma_manager.cpp` | URMA 日志前缀主路径 |
 | `vibe-coding-files/scripts/testing/verify/validate_urma_tcp_observability_logs.sh` | URMA/TCP 关键字批量验收 |
-| `docs/observable/kv-client/plans/zmq-rpc-metrics定界/ZMQ-metrics-故障注入与日志定界-测试串讲.md` | plans 内 ZMQ 专题（含仓库 `tests/` 故障注入说明，与本文独立） |
-| `docs/observable/kv-client/plans/urma-tcp-定界修复需求/kv-client-URMA环境验证执行清单.md` | URMA 构建与日志 §5 |
+| `../2026-04-zmq-rpc-metrics/test-walkthrough.md` | plans 内 ZMQ 专题（含仓库 `tests/` 故障注入说明，与本文独立） |
+| `./env-validation.md` | URMA 构建与日志 §5 |
 
 ---
 

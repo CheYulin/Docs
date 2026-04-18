@@ -8,4 +8,4 @@
 | KV | 开发指南 → KV | `DsClient` + `kv().set/get/delete`；DDR 键值示例。 |
 | Object | 开发指南 → Object | `object().create/get`、引用计数、`Buffer` 读写与 seal。 |
 
-**权威摘录与部署验证命令**见 [`../reliability/00-reference-openyuanrong-official.md`](../reliability/00-reference-openyuanrong-official.md)。
+**权威摘录与部署验证命令**见 [`../reliability/references.md`](../reliability/references.md)。
