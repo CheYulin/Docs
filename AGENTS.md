@@ -1,6 +1,6 @@
 # Agent 说明
 
-本仓库 **`vibe-coding-files`** 与 **`yuanrong-datasystem`（Open Yuanrong DataSystem）** 配对使用：前者承载**脚本 + 文档 + 计划**，后者以**源码与 `build.sh`** 为主。
+本仓库 **`yuanrong-datasystem-agent-workbench`**（历史目录名 `vibe-coding-files/`）与 **`yuanrong-datasystem`（Open Yuanrong DataSystem）** 配对使用：前者是 **Agent / vibe-coding 工作台**，承载 **脚本 + 文档 + 计划 + RFC + 验证产物 + Cursor Skills**；后者以 **源码与 `build.sh`** 为主。
 
 ## 工作角色（与本仓协作时）
 
