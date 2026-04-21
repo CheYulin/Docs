@@ -4,43 +4,64 @@
 >
 > **面向谁**：开发、运维、测试、值班。不要求先读任何其它文档。
 >
-> **凭什么准**：所有错误码、日志字符串、metric 名、gflag 默认值都以 `yuanrong-datasystem` 主干代码为 ground truth 验证过；源码锚点见附录 A/B/C/D。
+> **凭什么准**：错误码、日志字符串、metric 名、gflag 默认值均与 `yuanrong-datasystem` 主干行为对齐；需核对实现细节时请查代码库或研发侧专项文档。
 >
 > **两类故障**
 >
 > - **通断类（Availability）**：接口**返回失败** / 错误码非 0 / 功能不可用 / 进程挂 / 连接断。
-> - **时延类（Latency）**：接口**返回成功**但**慢** / P99 飙升 / 吞吐下跌 / 抖动。
+> - **时延类（Latency）**：接口**返回成功**但**慢** / **P99↑** / 尾延迟 **max** 飙升 / 抖动（本手册以**时延与成功率**为主观测面）。
 >
-> **四大责任边界**（定界目标：判给谁）
+> **责任边界怎么读**（定界目标：判给谁修）
 >
 > 1. **用户（User）**：业务侧误用 — 参数非法、对象不存在、未初始化、buffer 重用。
-> 2. **DataSystem（DS）**：ds 自身进程（Worker / Master / SDK / ZMQ-RPC / etcd 交互 / 心跳 / SHM 管理）。
-> 3. **URMA**：UB 硬件 / UMDK 驱动 / UB 链路。
-> 4. **OS**：操作系统与环境 — TCP/IP 网络、iptables、路由、fd、mem、disk、ulimit。
+> 2. **DataSystem 进程内（DS）**：跑在 Worker / Master / SDK **进程里**的实现与配置 — RPC 处理路径、线程池、心跳循环、SHM 元数据逻辑、扩缩容状态机等。**不含** etcd / OBS 等外部进程本体。
+> 3. **三方依赖**：**etcd 集群**、OBS 等 — DS 只作为**客户端**访问；日志里会出现 `etcd is timeout` / `etcd is unavailable`、request_out、队列堆积，根因通常在 **etcd 集群或网络到 etcd**，不是 DS 业务代码里的「算错」。
+> 4. **URMA**：UB 硬件 / UMDK 驱动 / UB 链路。
+> 5. **OS 与环境**：内核、资源与系统调用失败面 — **TCP/IP**、iptables、路由；**`zmq_msg_send` / `zmq_msg_recv` 等返回的硬失败**（errno 多来自网络栈或本机资源）；**文件与块设备 I/O**、**fd / mmap / ulimit**、磁盘满、OOM 等。
 >
-> **手册使用顺序**：§0 一图流 → 按通断或时延跳到 §1 或 §2 → 先定界（§x.2）→ 再定位（§x.3）→ §3 模板出工单。
+> 工单上仍可按习惯写「主责 + 协查」；**不要把 etcd 进程故障写成「DataSystem 内部缺陷」**，除非已排除 etcd 集群与连通性。
+>
+> **手册使用顺序**：**§导入** 从接口日志看成功率与 P99 → **§0** 一图流 → **§1 / §2**（先 **§x.2** 定界，再 **§x.3** 定位）→ **§3** 工单模板。**全量 metric 名称**见正文 **§6**（紧贴在附录之前）。
+
+---
+
+## 导入：成功率与 P99（从接口日志切入）
+
+优先从 **SDK Client 访问日志** `ds_client_access_<pid>.log` 读现象（字段格式见 **§1.3.1** ASCII 示意）：
+
+| 观测目标 | 在接口日志里怎么看 | 补充 |
+|----------|-------------------|------|
+| **成功率 / 通断** | 每行 **第一列 `code`**（错误码）。按接口 grep 后做 `awk -F'|' '{print $1}' \| sort \| uniq -c` 看分布 | **Get 陷阱**：`K_NOT_FOUND` 可能被记成 **code=0**，业务「查不到」要看 **`respMsg`**，不能只数非 0 |
+| **时延 / P99↑** | **第三列 `microseconds`**：单次调用耗时。用脚本或平台聚合 **P99、max**，或与基线对比是否整体右移 | 尾延迟还可对照 **Worker / Client** 的 `Metrics Summary` 里对应 Histogram（**§2.2**、`grep 'Compare with'`），时间窗要对齐 |
+
+**怎么分流到后文**：
+
+- 接口日志里 **非 0 明显增多**、或业务明确 **调用失败** → 先走 **§1 通断**。
+- **code 多为 0**，但 **microseconds 或 P99 明显变差**、或监控报 **延迟 SLA** → 先走 **§2 时延**。
+
+定界用 **Status + 结构化日志前缀 + Metrics delta**，请直接看 **§1.2 / §2.2**；下面 §1.1 / §2.1 只列**常见长什么样**，不是定界结论表。
 
 ---
 
 ## 0. 一图流：分类 → 定界 → 定位
 
 ```
-                      观察到现象
+                  观察到现象（或 §导入 的成功率/P99）
                            │
         ┌──────────────────┴───────────────────┐
         │                                      │
         ▼                                      ▼
   ① 通断（§1）                           ② 时延（§2）
   Status ≠ K_OK                          Status = K_OK
-  / 连接断 / 进程挂                        / 但 latency↑ / 吞吐↓
+  / 连接断 / 进程挂                        / 但 P99↑、latency max 飙升 / 抖动
         │                                      │
         ▼                                      ▼
    先定界（§1.2）                          先定界（§2.2）
-   ┌───┬───┬────┬───┐                    ┌───┬───┬────┬───┐
-   │ 用 │ DS │URMA│ OS │                    │ 用 │ DS │URMA│ OS │
-   │户 │    │    │    │                    │户 │    │    │    │
-   └─┬─┴─┬─┴─┬──┴─┬─┘                    └─┬─┴─┬─┴─┬──┴─┬─┘
-     ▼   ▼   ▼    ▼                        ▼   ▼   ▼    ▼
+   ┌──┬───┬───┬────┬───┐                 ┌──┬───┬───┬────┬───┐
+   │用│DS │三方│URMA│OS │                 │用│DS │三方│URMA│OS │
+   │户│   │etcd│    │   │                 │户│   │etcd│    │   │
+   └─┬┴──┴───┴─┬──┴─┬─┘                 └─┬┴──┴───┴─┬──┴─┬─┘
+     ▼  ▼  ▼  ▼  ▼                      ▼  ▼  ▼  ▼  ▼
                 再定位（§1.3 / §2.3）
    按具体子场景落到 [日志前缀] × metric delta × 处置动作
                            │
@@ -48,38 +69,70 @@
                   §3 结论模板 / 贴工单
 ```
 
-**四边界速记表**
+**五边界速记表**（DS **进程内** vs **etcd 等三方** vs **OS** 要分清）
 
 | 边界 | 我判给你的触发特征 | 常见凭据 |
 |------|-------------------|---------|
 | **用户** | Status ∈ {2, 3, 8}，或 Status=0 但业务 respMsg 异常 | access log 的 `respMsg` |
-| **DataSystem** | Status ∈ {1001,1002,19,23,25,29,31,32}；或 `[ZMQ_*]/[RPC_*]/[SOCK_*]` 打印；或 etcd / 心跳告警；或 SHM 钉住 | Worker / Client INFO log 结构化前缀、ZMQ metrics |
-| **URMA** | Status ∈ {1004,1006,1008,1009,1010}；或 `[URMA_*]` / `fallback to TCP/IP payload` | `[URMA_*]` 日志族、`*_urma_*_bytes` |
-| **OS** | Status ∈ {6,7,13,18}；或 `K_RUNTIME_ERROR(5)` 伴随 `Get mmap entry failed`；或 `[TCP_CONNECT_FAILED]` 且对端 Worker 存活 | `ulimit` / `ss` / `df` / `dmesg` / iptables |
+| **DS 进程内** | Status ∈ {23,29,31,32}；或 **对端处理慢 / 拒绝**（`[RPC_RECV_TIMEOUT]` + 全链路 ZMQ fault=0）；或 **`[UDS_*]` / `[SHM_FD_TRANSFER_FAILED]`**（同机辅助通道）；或 **线程池打满**；扩缩容 `meta_is_moving` | `resource.log` 线程池 / SHM；结构化日志前缀 |
+| **三方（etcd 等）** | Master/Worker 打 **`etcd is timeout` / `etcd is unavailable`**；`ETCD_QUEUE` 堆积、`ETCD_REQUEST_SUCCESS_RATE` 下降；Status=25；request_out 大量写 etcd 失败 | `grep etcd`；`etcdctl endpoint status`；**先查 etcd 集群与到 etcd 的网络** |
+| **URMA** | Status ∈ {1004,1006,1008,1009,1010}；或 `[URMA_*]` / `fallback to TCP/IP payload` | `[URMA_*]`、`*_urma_*_bytes` |
+| **OS** | Status ∈ {6,7,13,18}；**文件 / 磁盘 / fd** 类（含 `K_IO_ERROR`、`K_NO_SPACE`、`K_FILE_LIMIT_REACHED`）；**`K_RUNTIME_ERROR(5)` + `Get mmap entry failed`**；**`[TCP_*]` 通断且对端进程仍存活**；**`[ZMQ_SEND_FAILURE_TOTAL]` / `[ZMQ_RECEIVE_FAILURE_TOTAL]`**（底层多为 **errno / 网络栈 / 资源**） | `ulimit` / `ss` / `df` / `dmesg` / iptables；`zmq_last_error_number` |
 
-> ⚠️ **`K_RPC_UNAVAILABLE(1002)` 是"桶码"**：相同 1002 可能由 DS（Worker crash / 队列清空）或 OS（iptables / 端口未开 / 路由断）引起，**必须看下一层 `[...]` 前缀才能定界**。
+> ⚠️ **`K_RPC_UNAVAILABLE(1002)` 是"桶码"**：相同 1002 可能来自 **DS 进程内**（Worker crash、对端拒绝）、**OS**（iptables、端口、路由、`zmq_*` 硬失败）或 **三方 etcd**（`etcd is unavailable` 路径）。**必须看下一层 `[...]` 前缀与 etcd 字符串才能定界**。
 >
-> ⚠️ **`K_OK(0) ≠ 一切正常`**：`KVClient::Get` 会把 `K_NOT_FOUND` 写成 `K_OK` 记录 access log（见附录 A），业务"查不到"时 **Status=0 + respMsg=NOT_FOUND**，要看 respMsg 判用户边界。
+> ⚠️ **`K_OK(0) ≠ 一切正常`**：`KVClient::Get` 会把 `K_NOT_FOUND` 记成 `K_OK` 写入 access log；业务「查不到」时常为 **Status=0 + respMsg 含 NOT_FOUND**，要以 `respMsg` 判**用户**边界，不能只看错误码 0。
 
 ---
 
 ## 1. 通断类故障
 
-### 1.1 典型表现
+### 1.1 常见长什么样（通断侧现象，非定界表）
 
-| 表现 | 一般分类线索 |
-|------|-------------|
-| `Put/Get/Create/Publish` 返回非 0 Status | 见 §1.2 决策树 |
-| Status=0 但 `respMsg` 含 `NOT_FOUND / invalid / not ready` | 用户边界 |
-| 客户端 `Cannot receive heartbeat from worker.` | DS 边界（Worker 挂 / 网络断） |
-| `[HealthCheck] Worker is exiting now` | DS 边界（主动退出，由调度器拉起） |
-| `etcd is timeout` / `etcd is unavailable` | DS 边界（etcd 子系统） |
-| `Get mmap entry failed` / Status=5 | OS 边界（fd / mmap 限制） |
-| `fallback to TCP/IP payload` 但功能成功 | 非通断（降级成功）→ 跳 §2 看时延 |
+| 业务或监控上你先注意到 | access / 运行日志上典型长什么样 |
+|------------------------|----------------------------------|
+| 接口大量失败、错误码非 0 | `ds_client_access_*.log` **第一列**频繁出现 1001、1002、1004… 或 6、7、13、18 等 |
+| 返回「成功」但业务说数据不对 / 查不到 | **code=0** 但 **`respMsg`** 含 `NOT_FOUND`、`invalid`、`not ready` 等（Get 的 NOT_FOUND 陷阱见 §导入） |
+| 客户端连不上 Worker、扩缩容卡顿 | SDK/Client 日志出现 `Cannot receive heartbeat from worker.`；或 Worker 侧 `[HealthCheck] Worker is exiting now` |
+| 元数据 / Master 卡住 | Master 或 Worker 日志出现 **`etcd is timeout` / `etcd is unavailable`**；或 `request_out` 里 etcd 请求异常增多 |
+| 机器宕机、节点驱逐、对端进程没了 | 心跳与 RPC 同时异常；**resource.log / Metrics** 里对象数、连接数断崖（细节在 §1.3） |
+| SHM / mmap 相关报错 | Client 或 Worker 日志出现 `Get mmap entry failed` 等；常与 Status=5 同屏 |
+| URMA 仍返回成功但日志提示走 TCP | 日志含 `fallback to TCP/IP payload` — 通断上可能仍「成功」，**时延**见 §2 |
+
+**定界**：必须用 **§1.2** 的 Status 树 + Step2 前缀，不能单靠上表。
 
 ### 1.2 通断故障的定界（三步，≤ 1 分钟）
 
-> 目标：拿到**用户 / DS / URMA / OS** 四选一结论。
+> 目标：拿到**用户 / DS 进程内 / 三方(etcd) / URMA / OS** 之一为主责结论（可备注协查）。
+
+**通断定界总览**（与 Step 1～3 对应）：
+
+```
+              access / SDK 日志 / 告警
+                        │
+                        ▼
+           ┌────────────────────────────┐
+           │ Step 1  扫 Status 树       │
+           │ 0→看 respMsg；1004+→URMA   │
+           │ 1001/1002→进 Step 2        │
+           └─────────────┬──────────────┘
+                         │
+       ┌─────────────────┼─────────────────┐
+       │ 已能判五边界之一 │ 桶码 / 需前缀    │
+       ▼                 ▼                 │
+  用户/OS/URMA    ┌──────────────┐        │
+  /三方(25/5)     │ Step 2 日志   │        │
+                  │ 前缀 + errno  │        │
+                  └──────┬───────┘        │
+                         ▼                 │
+                  ┌──────────────┐        │
+                  │ Step 3 交叉   │◄───────┘
+                  │ ping/ss/对端  │
+                  │ 是否存活      │
+                  └──────┬───────┘
+                         ▼
+               主责边界 → §1.3 定位小节
+```
 
 **Step 1：看 StatusCode 数值**（主判据）
 
@@ -92,11 +145,12 @@ Status →
 │
 ├─ 2 / 3 / 8                                 → 用户
 ├─ 5（K_RUNTIME_ERROR）
-│    ├─ Worker/Client 日志有 "Get mmap entry failed"  → OS（mmap/fd）
-│    ├─ 有 "etcd is timeout"（Master 端）             → DS（etcd）
-│    └─ 有 "urma ... payload ..."                    → URMA
-├─ 6 / 7 / 13 / 18                           → OS（内存/IO/磁盘/fd）
-├─ 19 / 23 / 25 / 29 / 31 / 32               → DS（可用性/扩缩容/心跳）
+│    ├─ Worker/Client 日志有 "Get mmap entry failed"     → OS（mmap/fd）
+│    ├─ 有 "etcd is timeout" / "etcd is unavailable"   → 三方（etcd）
+│    └─ 有 "urma ... payload ..."                       → URMA
+├─ 6 / 7 / 13 / 18                           → OS（内存/IO/磁盘/fd/文件）
+├─ 25（K_MASTER_TIMEOUT）                    → 三方（etcd）为主，兼查 Master 与网络
+├─ 19 / 23 / 29 / 31 / 32                    → DS 进程内（可用性/扩缩容/心跳）
 ├─ 1001（RPC 超时）                           → 进入 Step 2
 ├─ 1002（RPC 不可达，桶码）                   → 进入 Step 2
 └─ 1004 / 1006 / 1008 / 1009 / 1010          → URMA
@@ -112,7 +166,8 @@ Status →
 | `[UDS_CONNECT_FAILED]` / `[SHM_FD_TRANSFER_FAILED]` | **DS** | 同机 Worker 未就绪 / UDS path 配置 |
 | `[RPC_RECV_TIMEOUT]` + ZMQ fault counter 全 0 | **DS** | 对端**处理**慢，把 RPC 拖超时，非网络 |
 | `[RPC_SERVICE_UNAVAILABLE]` | **DS** | 对端主动拒绝（状态不对 / shutting down） |
-| `[ZMQ_SEND_FAILURE_TOTAL]` / `[ZMQ_RECEIVE_FAILURE_TOTAL]` + `zmq_last_error_number ∈ {EHOSTUNREACH, ENETDOWN, ...}` | **OS** | 网络栈真的挂了 |
+| `[ZMQ_SEND_FAILURE_TOTAL]` / `[ZMQ_RECEIVE_FAILURE_TOTAL]`（`zmq_msg_send` / `zmq_msg_recv` 硬失败） | **OS** 为主 | 多为 **errno / 内核网络栈 / 本机资源**；按 `zmq_last_error_number` 对照 `errno` |
+| 日志先出现 **`etcd is timeout` / `etcd is unavailable`**（可与 1002/25 同屏） | **三方（etcd）** | DS 仅客户端；先恢复 etcd 集群与连通性 |
 | `[SOCK_CONN_WAIT_TIMEOUT]` / `[REMOTE_SERVICE_WAIT_TIMEOUT]` | **OS 或 DS** | 握手迟；看对端 Worker 是否存活再判 |
 | `zmq_event_handshake_failure_total` delta > 0 | **DS**（安全/证书） | TLS / 认证配置 |
 
@@ -126,7 +181,13 @@ Status →
 
 #### 1.3.1 用户边界
 
-**定位依据**：Client Access Log（格式 `code | handleName | microseconds | dataSize | reqMsg | respMsg`）。
+**定位依据**：Client Access Log（字段竖线分隔，与测试侧 `08-fault-triage-guide` 一致）。
+
+```
+code | handleName | microseconds | dataSize | reqMsg | respMsg
+  ↑      ↑            ↑            ↑         ↑         ↑
+ 错误码  接口名        耗时(μs)     数据大小   请求参数   响应信息
+```
 
 | respMsg 片段 | 含义 | 处置 |
 |--------------|------|------|
@@ -148,9 +209,29 @@ grep '^2 |' $LOG/ds_client_access_*.log              # INVALID 类
 grep -E "K_NOT_FOUND|Can.?t find object" $LOG/ds_client_*.INFO.log
 ```
 
-#### 1.3.2 DataSystem 边界
+#### 1.3.2 DS 进程内边界
 
-**DS 边界下可再分 4 个子场景**：
+**进程内**可再分子场景（与 **三方 etcd**、**OS** 区分后再看本节）。
+
+**§1.3.2 (a)～(e) 怎么选**（先对信号，再下钻小节；**(c) 主责多为三方 etcd**）：
+
+```
+        通断已需读 §1.3.2（RPC/连接/排队类）
+                        │
+         ┌──────────────┴──────────────┐
+         │ 你最先抓到的信号更偏哪一类？  │
+         └──────────────┬──────────────┘
+    ┌────────┬──────────┼──────────┬────────┐
+    ▼        ▼          ▼          ▼        ▼
+ RPC 超时  网关重建    etcd/      心跳/    mmap/
+ 或服务    /disconnect  ETCD_QUEUE 扩缩容   SHM fd
+ 不可用    对端仍活     /25 同屏   23/31/32  传递失败
+    │        │          │          │        │
+    ▼        ▼          ▼          ▼        ▼
+  (a)      (b)        (c)        (d)      (e)
+ 对端慢    会话抖动   三方元数据  生命周期  同机通道
+ fault≈0   非主动退出  路径      HealthCheck 常与 OS 交叉
+```
 
 ##### (a) RPC 对端处理慢 / 队列被清（导致 1001/1002）
 
@@ -173,18 +254,18 @@ grep -E "K_NOT_FOUND|Can.?t find object" $LOG/ds_client_*.INFO.log
 
 **处置**：频率低可忽略（SDK 自重连）；频率高转 OS 边界查网络。
 
-##### (c) etcd / 元数据路径
+##### (c) 三方依赖 — etcd / 元数据路径
 
 | 证据 | 判据 |
 |------|------|
-| Master log `etcd is timeout` | Master 看到 etcd 超时 |
-| Worker log `etcd is unavailable` | Worker 看到 etcd 不可达 |
-| `resource.log` `ETCD_QUEUE.CURRENT_SIZE` 堆积、`ETCD_REQUEST_SUCCESS_RATE` 下降 | etcd 成为瓶颈 |
-| Status=25（`K_MASTER_TIMEOUT`） | 客户端侧看到 Master 超时 |
+| Master log `etcd is timeout` | Master 侧认为 etcd 超时（**etcd 集群或链路**） |
+| Worker log `etcd is unavailable` | Worker 侧认为 etcd 不可达 |
+| `resource.log` `ETCD_QUEUE.CURRENT_SIZE` 堆积、`ETCD_REQUEST_SUCCESS_RATE` 下降 | 写 **etcd** 受阻或失败率高 |
+| Status=25（`K_MASTER_TIMEOUT`） | 多与控制面 / **etcd** 不可用同屏出现 |
 
-> ⚠️ **etcd 两种字符串并存**：Master 用 `etcd is timeout`（映射 `K_RUNTIME_ERROR`），Worker 用 `etcd is unavailable`（映射 `K_RPC_UNAVAILABLE`）。grep 必须**两个都加**。
+> ⚠️ **两串文并存**：Master 常见 `etcd is timeout`，Worker 常见 `etcd is unavailable`；grep **两个都加**。
 
-**处置**：`systemctl status etcd`；集群查 raft leader；恢复后 1002/25 自愈。
+**处置**：`systemctl status etcd`（或集群等价命令）；`etcdctl endpoint status`；查 **到 etcd 的网络**；恢复后观察 1002/25 是否自愈。**责任归属写「三方：etcd」**，除非已证明 DS 仅误配 endpoint。
 
 ##### (d) 心跳 / Worker 生命周期 / 扩缩容
 
@@ -253,25 +334,56 @@ grep -E '\[URMA_RECREATE_JFS(_FAILED|_SKIP)?\]' $LOG/datasystem_worker.INFO.log
 
 ## 2. 时延类故障
 
-### 2.1 典型表现
+### 2.1 常见长什么样（时延侧现象，非定界表）
 
-| 表现 | 一般分类线索 |
-|------|-------------|
-| `client_rpc_get_latency` / `client_rpc_publish_latency` max 飙升 | 见 §2.2 |
-| `worker_process_get_latency` / `worker_process_publish_latency` max 飙升 | Worker 侧慢 → DS |
-| `worker_urma_write_latency` max 飙升 | URMA |
-| `worker_tcp_write_latency` max 飙升 + UB 字节 delta=0 | 降级后被 TCP 拖慢 → URMA（UB 故障）或 OS（TCP 抖） |
-| 吞吐下跌但无错误 | ZMQ 背压（`zmq_send_try_again_total` 涨）→ DS 消费侧慢 |
-| Client 慢但 Worker 快 | 中间链路（OS 网络）或 SDK 本地 |
+| 业务或监控上你先注意到 | 接口日志 / Metrics 上典型长什么样 |
+|------------------------|-----------------------------------|
+| 接口变慢、P99↑、超时增多 | access **`microseconds`** 整体变大或重尾拉长；或监控上 **P99↑**（与 §导入 对齐时间窗） |
+| 成功率还行，只是「慢」 | access **code 多为 0**，但耗时列仍恶化 |
+| 只有「最慢的几次」特别夸张 | `Metrics Summary` 里对应 Histogram **max 飙升**，avg 可能还行（§2.2 Step1） |
+| 怀疑 UB / 降级 | 日志 **`fallback to TCP/IP payload`**；或 **URMA 字节 counter 不涨、TCP 字节涨**（metric 名见 §6） |
+| 不报错但感觉「卡住」 | 无新错误码时，可看 **`zmq_send_try_again_total`** 等是否持续上涨（§2.3.2(d)） |
+
+**定界**：用 **§2.2** 三步（Client vs Worker、再拆链路）；上表不替代 Step2/3。
 
 ### 2.2 时延故障的定界（三步，≤ 3 分钟）
 
-> 目标：同样输出 **用户 / DS / URMA / OS** 四选一。
+> 目标：同样输出 **用户 / DS 进程内 / 三方(etcd) / URMA / OS** 之一为主（时延类里 etcd 常体现为 `worker_rpc_create_meta_latency` max↑ + `ETCD_*` 异常）。
+
+**时延定界总览**（与 Step 1～3 对应）：
+
+```
+        access P99↑ / microseconds 变差（code 多为 0）
+                        │
+                        ▼
+           ┌────────────────────────────┐
+           │ Step 1  delta 段确认慢     │
+           │ Histogram max；count=0→停  │
+           └─────────────┬──────────────┘
+                         ▼
+           ┌────────────────────────────┐
+           │ Step 2  client_rpc_*       │
+           │   vs worker_process_*      │
+           │ 谁慢、是否同幅？            │
+           └─────────────┬──────────────┘
+         ┌───────────────┼───────────────┐
+         ▼               ▼               ▼
+   同幅→§2.3.2      Client 更慢      Worker 快
+   (a)～(d)         → Step 3 拆链路   Client 慢
+                         │          → 用户/SDK
+                         ▼
+           ┌────────────────────────────┐
+           │ Step 3  URMA / TCP 降级     │
+           │ ZMQ IO + fault / RTT 丢包   │
+           └─────────────┬──────────────┘
+                         ▼
+               主责边界 → §2.3 各小节
+```
 
 **Step 1：是否真慢？**
 
 - 看 `Metrics Summary` 的 `Compare with ... ms before` 段（下称 *delta 段*）；关注对应接口 Histogram 的 `max`（本周期 periodMax）。
-- delta 段的 `max` 相比 baseline 翻 2~3 倍以上 → 确认慢。
+- delta 段的 `max` 相对 baseline **明显抬升**（例如 **2～3 倍以上**）或 **P99↑** 与现象一致 → 确认慢。
 - delta 段 `count=+0` 但 Total 段很大 → 无流量，非时延问题。
 
 **Step 2：是 Client 链路慢还是 Worker 处理慢？**
@@ -279,17 +391,18 @@ grep -E '\[URMA_RECREATE_JFS(_FAILED|_SKIP)?\]' $LOG/datasystem_worker.INFO.log
 | 对比 | 结论 |
 |------|------|
 | `client_rpc_get_latency` max 显著 > `worker_process_get_latency` max | 中间链路慢 → 进入 Step 3（可能 DS 框架 / URMA / OS 网络） |
-| 两者同幅飙升 | Worker 业务自身慢 → **DS**；去看 Worker CPU / 线程池 / 锁 |
+| 两者同幅 **max 飙升** | Worker 业务自身慢 → **DS 进程内**；看 CPU / 线程池 / 锁 |
 | Worker 快、Client 慢、且 `worker_to_client_total_bytes` delta 正常 | SDK 本地慢（反序列化 / 用户线程阻塞）→ **用户** 或 **DS 客户端** |
 
 **Step 3：拆 Client ↔ Worker 的中间链路**
 
-- `worker_urma_write_latency` max 飙 → **URMA**。
-- `worker_tcp_write_latency` max 飙 + `*_urma_*_bytes` delta=0 + `fallback to TCP/IP payload` → **URMA**（UB 故障导致 TCP 降级）。
-- `zmq_send_io_latency` / `zmq_receive_io_latency` max 飙 + ZMQ fault counter 全 0 → 再看 `zmq_rpc_serialize_latency / deserialize_latency`：
-  - **序列化+反序列化占比 < 5%** → 网络或 Worker 对端处理慢，**不是 DS 框架**。
-  - 占比 ≥ 5% → **DS** 框架侧（大 payload / protobuf 低效）。
-- ping RTT 抖 / `tc qdisc` 有 netem 规则 / `nstat` 丢包 → **OS**。
+- `worker_urma_write_latency` max **飙升** → **URMA**。
+- `worker_tcp_write_latency` max **飙升** + `*_urma_*_bytes` delta=0 + `fallback to TCP/IP payload` → **URMA**（UB 故障导致 TCP 降级）。
+- `zmq_send_io_latency` / `zmq_receive_io_latency` max **飙升** 且 **`zmq_send_failure_total` / `zmq_receive_failure_total` 有 delta** → **OS**（`zmq_msg_send` / `zmq_msg_recv` 硬失败，errno 多来自网络栈或本机资源）。
+- `zmq_send_io_latency` / `zmq_receive_io_latency` max **飙升** + **fault counter 全 0** → 再看 `zmq_rpc_serialize_latency / deserialize_latency`：
+  - **序列化+反序列化占比 < 5%** → **对端处理慢 → DS 进程内** 与 **中间链路 → OS** 二选一：看 `worker_process_*_latency` 是否同幅 **飙升**。
+  - 占比 ≥ 5% → **DS 进程内**框架侧（大 payload / protobuf 低效）。
+- ping RTT **抖** / `tc qdisc` 有 netem 规则 / `nstat` 丢包 → **OS**。
 
 **性能自证清白公式**
 
@@ -308,18 +421,42 @@ RPC 框架占比 = (zmq_rpc_serialize_latency + zmq_rpc_deserialize_latency)
 - SDK 调用线程被业务阻塞：SDK `StartMetricsThread` 的 metrics 仍然正常滚动，但业务线程 pstack 里卡在 app 代码 → 用户线程。
 - 客户端 GC / 同步 IO：看 SDK 侧 pidstat，非 DS 问题。
 
-#### 2.3.2 DataSystem 边界
+#### 2.3.2 DS 进程内边界
+
+**§2.3.2 (a)～(d) 怎么选**（默认前提：**§2.2 Step2** 已判断 **client 与 worker process 延迟同幅飙升**，或瓶颈明确在 Worker 处理侧）：
+
+```
+              同幅飙升 / Worker 侧为主
+                        │
+     worker_rpc_get_remote_object_latency 单独突出？
+              是 ──────────────────────────► (c) 跨 Worker Get
+              否
+                        │
+     create_meta_latency↑ 且 ETCD_* / etcd 日志差？
+              是 ──► 主责 **三方 etcd**（对照 §1.3.2(c)）
+              否
+                        │
+     RPC 框架占比 ≥ 5%？（见下文公式）
+              是 ──────────────────────────► (b) 序列化/大 payload
+              否
+                        │
+     zmq_send_try_again↑ 且 fault counters≈0？
+              是 ──────────────────────────► (d) HWM 背压
+              否
+                        ▼
+                   (a) 业务路径 / 线程池 / 锁 / CPU
+```
 
 ##### (a) Worker 业务慢
 
 | 证据 | 判据 |
 |------|------|
-| `worker_process_get_latency / publish_latency` max 飙 | Worker 业务路径慢 |
-| `worker_rpc_create_meta_latency` max 飙 | 写元数据路径慢（etcd 或 Master 排队） |
+| `worker_process_get_latency / publish_latency` max **飙升** | Worker 业务路径慢 |
+| `worker_rpc_create_meta_latency` max **飙升** | 写元数据路径慢；若伴 **`ETCD_*` 异常** → 主责 **三方 etcd** |
 | `resource.log` `*_OC_SERVICE_THREAD_POOL.WAITING_TASK_NUM` 堆积 | RPC 线程池打满 |
-| `resource.log` `ETCD_QUEUE.CURRENT_SIZE` / `ETCD_REQUEST_SUCCESS_RATE` | etcd 侧瓶颈 |
+| `resource.log` `ETCD_QUEUE` / `ETCD_REQUEST_SUCCESS_RATE` | **etcd** 请求排队或成功率跌 → **三方** |
 
-**处置**：扩线程池；查锁 / 慢 syscall / L2 miss；etcd 端 `ETCDCTL_API=3 etcdctl endpoint status -w table`。
+**处置**：线程池 / CPU / 锁；若 etcd 指标差，**先 etcd 集群与网络**，再谈 DS 调参。
 
 ##### (b) DS 框架自身（序列化 / protobuf / ZMQ）
 
@@ -334,24 +471,24 @@ RPC 框架占比 = (zmq_rpc_serialize_latency + zmq_rpc_deserialize_latency)
 
 | 证据 | 判据 |
 |------|------|
-| `worker_rpc_get_remote_object_latency` max 飙 | 远端拉取慢 |
-| 远端 Worker `worker_process_get_latency` 同幅飙 | 远端业务慢 |
+| `worker_rpc_get_remote_object_latency` max **飙升** | 远端拉取慢 |
+| 远端 Worker `worker_process_get_latency` 同幅 **飙升** | 远端业务慢 |
 | 远端 Worker 正常 | 中间网络或 URMA → 转 §2.3.3 / §2.3.4 |
 
-##### (d) ZMQ 背压（吞吐掉，不一定是 latency）
+##### (d) ZMQ 背压（无错误码，但尾延迟劣化）
 
 | 证据 | 判据 |
 |------|------|
-| `zmq_send_try_again_total` 持续涨，其它 fault counter 为 0 | HWM 背压 |
+| `zmq_send_try_again_total` 持续涨，其它 fault counter 为 0 | HWM 背压，发送侧等槽位 |
 | `zmq_receive_try_again_total`（仅 blocking 模式）持续涨 | 接收端消费慢 |
 
-**处置**：加消费端线程 / 降峰限流；不是错误。
+**处置**：加消费端线程 / 降峰限流；**Status 仍可为 0**，以 **latency max / P99** 观测。
 
 #### 2.3.3 URMA 边界
 
 | 证据 | 判据 | 处置 |
 |------|------|------|
-| `worker_urma_write_latency` max 飙 | UB 硬件 / 驱动慢 | 查 UMDK / UB 端口状态 |
+| `worker_urma_write_latency` max **飙升** | UB 硬件 / 驱动慢 | 查 UMDK / UB 端口状态 |
 | `client_*_urma_*_bytes` delta=0 + `client_*_tcp_*_bytes` delta 正常 | 已降级 TCP | 看 `fallback to TCP/IP payload` 频率；恢复 UB 就回 URMA 路径 |
 | `fallback to TCP/IP payload` 频率 > 0 | 有降级 | UB 不稳；CPU 拷贝放大 |
 | `[URMA_NEED_CONNECT]` / `[URMA_RECREATE_JFS]` 间歇 | 连接/队列不稳 | 影响尾延迟 |
@@ -370,7 +507,7 @@ ibstat || ubinfo || ifconfig ub0
 |------|------|------|
 | ping 对端 RTT 抖 | `ping -i 0.2 <peer>` | 排 tc / 交换机 |
 | `tc qdisc show dev eth0` 有 netem | 人工注入残留 | `tc qdisc del dev eth0 root netem` |
-| `nstat / ss -ti` 重传率飙 | TCP 重传 | 查网卡 / 驱动 |
+| `nstat / ss -ti` 重传率 **飙升** | TCP 重传 | 查网卡 / 驱动 |
 | iostat / vmstat 显示 IO wait / swap | 本机资源饱和 | 扩资源 / 隔离业务 |
 | `resource.log` `SHARED_MEMORY` 接近 `TOTAL_LIMIT` | 内存压力传导到 GC/分配慢 | 扩 SHM 池 |
 | `worker_shm_ref_table_bytes` gauge 持续涨 + `worker_object_count` 持平 | SHM 钉住（DS 实现问题，但表征是 OS 内存被吃光） | 见 §1.3.2(e) |
@@ -381,7 +518,7 @@ ibstat || ubinfo || ifconfig ub0
 
 ```
 【故障类型】通断 / 时延（二选一，主因写第一）
-【责任边界】用户 / DataSystem / URMA / OS（必须给出其一；跨界写主责+协查）
+【责任边界】用户 / DS 进程内 / 三方(etcd 等) / URMA / OS（必须给出其一；跨界写主责+协查）
 【错误码】<code> <枚举名> + rc.GetMsg()（时延类此行写 "N/A, Status=K_OK"）
 【日志证据】
   - <SDK 日志一行，含 TraceID/时间 + objectKey>
@@ -406,7 +543,7 @@ Step1：Status=1002 → 进入日志前缀分流
 Step2：先出现 [RPC_RECV_TIMEOUT]，所有 ZMQ fault counter delta=0
        → 对端处理慢型，定界 DS
 Step3：resource.log 对端 WORKER_OC_SERVICE_THREAD_POOL.WAITING_TASK_NUM=128 堆积
-【类型】通断 【边界】DataSystem（RPC 对端慢）
+【类型】通断 【边界】DS 进程内（RPC 对端慢）
 【处置】扩 oc_rpc_thread_num；查 Worker CPU / 锁
 ```
 
@@ -442,30 +579,30 @@ Step1：Status=0 → 看 respMsg
 ### 示例 5 · 时延 / URMA：Put avg 500us → 3000us，Status=0
 
 ```
-Step1：delta 段 client_rpc_publish_latency max 飙
-Step2：worker_process_publish_latency 同幅飙 不成立；
+Step1：delta 段 client_rpc_publish_latency max **飙升**
+Step2：worker_process_publish_latency 同幅 **飙升** 不成立；
        client_put_urma_write_total_bytes delta=0，client_put_tcp_write_total_bytes delta=+50MB
 Step3：grep 'fallback to TCP/IP payload' 200/min
 【类型】时延 【边界】URMA（UB 降级 TCP）
 【处置】ifconfig ub0 / UMDK；恢复后 urma 字节 delta 回升
 ```
 
-### 示例 6 · 时延 / DS：Get P99 飙，Status=0
+### 示例 6 · 时延 / DS：Get **P99↑**，Status=0
 
 ```
 Step1：client_rpc_get_latency max=50ms，baseline 2ms
-Step2：ZMQ fault counter 全 0；worker_process_get_latency max=38ms（同幅飙）
+Step2：ZMQ fault counter 全 0；worker_process_get_latency max=38ms（同幅 **飙升**）
 Step3：resource.log WORKER_OC_SERVICE_THREAD_POOL.WAITING_TASK_NUM 堆积
-【类型】时延 【边界】DataSystem（Worker 业务慢）
+【类型】时延 【边界】DS 进程内（Worker 业务慢）
 【处置】查 Worker CPU / 线程池 / 锁；必要时扩线程数
 ```
 
 ### 示例 7 · 时延 / OS：ZMQ 框架占比低，中间链路抖
 
 ```
-Step1：client_rpc_get_latency max 飙，worker_process_get_latency 未变
-Step2：zmq_send_io_latency max 飙；zmq_rpc_serialize+deserialize 占比 ~3%
-Step3：ping 对端 RTT 抖动；tc qdisc 有 netem 延迟
+Step1：client_rpc_get_latency max **飙升**，worker_process_get_latency 未变
+Step2：zmq_send_io_latency max **飙升**；zmq_rpc_serialize+deserialize 占比 ~3%
+Step3：ping 对端 RTT **抖动**；tc qdisc 有 netem 延迟
 【类型】时延 【边界】OS（网络）
 【处置】tc qdisc del ...；或换网卡 / 换交换路径
 ```
@@ -477,7 +614,7 @@ Step1：无错误码，但 resource.log SHARED_MEMORY 从 3.58GB → 37.5GB
 Step3：worker_shm_ref_table_bytes gauge 持续上涨
        worker_object_count gauge 持平
        worker_allocator_alloc_bytes_total delta > worker_allocator_free_bytes_total delta
-【类型】通断（容量型，最终 OOM）【边界】DataSystem（SHM ref 未释放）
+【类型】通断（容量型，最终 OOM）【边界】DS 进程内（SHM ref 未释放）
 【处置】查 client DecRef；Worker 清理超时
 ```
 
@@ -488,25 +625,25 @@ Step3：worker_shm_ref_table_bytes gauge 持续上涨
 ### 5.1 错误码 → 边界一览
 
 ```
-StatusCode                           边界   备注
-0    K_OK                             用户?  看 respMsg；注意 NOT_FOUND→K_OK 陷阱
+StatusCode                           边界        备注
+0    K_OK                             用户?       看 respMsg；NOT_FOUND→K_OK 陷阱
 2    K_INVALID                        用户
 3    K_NOT_FOUND                      用户
-5    K_RUNTIME_ERROR                  OS/DS  看具体日志
+5    K_RUNTIME_ERROR                  OS/三方/URMA  mmap→OS；etcd 串→三方；payload→URMA
 6    K_OUT_OF_MEMORY                  OS
-7    K_IO_ERROR                       OS
+7    K_IO_ERROR                       OS         文件/IO
 8    K_NOT_READY                      用户
 13   K_NO_SPACE                       OS
-18   K_FILE_LIMIT_REACHED             OS
-19   K_TRY_AGAIN                      DS
+18   K_FILE_LIMIT_REACHED             OS         fd/文件限制
+19   K_TRY_AGAIN                      DS/OS      结合前缀；常为瞬时繁忙或网络类
 20   K_DATA_INCONSISTENCY             DS
-23   K_CLIENT_WORKER_DISCONNECT       DS
-25   K_MASTER_TIMEOUT                 DS
+23   K_CLIENT_WORKER_DISCONNECT       DS/OS/机器  先确认进程与节点
+25   K_MASTER_TIMEOUT                 三方(etcd) 为主 兼查 Master 与网络
 29   K_SERVER_FD_CLOSED               DS
 31   K_SCALE_DOWN                     DS
 32   K_SCALING                        DS
-1001 K_RPC_DEADLINE_EXCEEDED          DS/OS  分流见 §1.2 Step2
-1002 K_RPC_UNAVAILABLE                DS/OS  同上（桶码）
+1001 K_RPC_DEADLINE_EXCEEDED          DS/OS      §1.2 Step2
+1002 K_RPC_UNAVAILABLE                DS/OS/三方   桶码；含 etcd unavailable 路径
 1004 K_URMA_ERROR                     URMA
 1006 K_URMA_NEED_CONNECT              URMA
 1008 K_URMA_TRY_AGAIN                 URMA
@@ -533,8 +670,8 @@ grep 'fallback to TCP/IP payload' $LOG/*.INFO.log
 grep -E '\[HealthCheck\] Worker is exiting now|Cannot receive heartbeat from worker' \
   $LOG/*.INFO.log
 
-# etcd 两种字符串
-grep -E 'etcd is (timeout|unavailable)' $LOG/datasystem_worker.INFO.log
+# etcd 两种字符串（Master / Worker 日志都搜）
+grep -E 'etcd is (timeout|unavailable)' $LOG/*.INFO.log
 
 # SHM 钉住
 grep -E 'worker_shm_(ref_table_(bytes|size)|unit_(created|destroyed)_total|ref_(add|remove)_total)|worker_allocator_(alloc|free)_bytes_total' \
@@ -549,7 +686,7 @@ grep 'DS_KV_CLIENT_GET' $LOG/ds_client_access_*.log \
   | awk -F'|' '{print $1}' | sort | uniq -c
 ```
 
-### 5.3 四边界各自的 OS/环境速查
+### 5.3 OS / etcd / URMA / DS 进程速查
 
 ```bash
 # OS 资源
@@ -590,80 +727,9 @@ gstack <worker_pid>                      # 或 pstack
 
 ---
 
-## 附录
+## 6. KV Metrics 全量清单（54 条）
 
-### 附录 A · 错误码代码锚点
-
-枚举定义 `include/datasystem/utils/status.h`：
-
-```28:79:include/datasystem/utils/status.h
-enum StatusCode : uint32_t {
-    K_OK = 0,
-    K_DUPLICATED = 1,
-    K_INVALID = 2,
-    K_NOT_FOUND = 3,
-    K_KVSTORE_ERROR = 4,
-    K_RUNTIME_ERROR = 5,
-    K_OUT_OF_MEMORY = 6,
-    K_IO_ERROR = 7,
-    K_NOT_READY = 8,
-    // ...
-    K_FILE_LIMIT_REACHED = 18,
-    K_TRY_AGAIN = 19,
-    K_DATA_INCONSISTENCY = 20,
-    // ...
-    K_RPC_DEADLINE_EXCEEDED = 1001,
-    K_RPC_UNAVAILABLE = 1002,
-    K_URMA_ERROR = 1004,
-    K_URMA_NEED_CONNECT = 1006,
-    K_URMA_TRY_AGAIN = 1008,
-    K_URMA_CONNECT_FAILED = 1009,
-    K_URMA_WAIT_TIMEOUT = 1010,
-```
-
-NOT_FOUND→K_OK 记账陷阱：
-
-```187:189:src/datasystem/client/kv_cache/kv_client.cpp
-    StatusCode code = rc.GetCode() == K_NOT_FOUND ? K_OK : rc.GetCode();
-    accessPoint.Record(code, std::to_string(dataSize), reqParam, rc.GetMsg());
-```
-
----
-
-### 附录 B · 日志前缀 → 源码锚点
-
-| 前缀 | 源码位置 |
-|------|---------|
-| `[TCP_CONNECT_FAILED]` | `src/datasystem/common/rpc/unix_sock_fd.cpp::ConnectTcp` (~477) |
-| `[TCP_CONNECT_RESET]` | `src/datasystem/common/rpc/unix_sock_fd.cpp::ErrnoToStatus` (~60) |
-| `[TCP_NETWORK_UNREACHABLE]` | `src/datasystem/common/rpc/zmq/zmq_stub_conn.cpp::SendHeartBeats` (~264) |
-| `[UDS_CONNECT_FAILED]` | `src/datasystem/common/rpc/unix_sock_fd.cpp::Connect` (~437) |
-| `[SHM_FD_TRANSFER_FAILED]` | `src/datasystem/client/client_worker_common_api.cpp::Connect` (~319) |
-| `[SOCK_CONN_WAIT_TIMEOUT]` | `src/datasystem/common/rpc/zmq/zmq_stub_conn.cpp::WaitForConnected` (~1503) |
-| `[REMOTE_SERVICE_WAIT_TIMEOUT]` | 同上 (~1509) |
-| `[RPC_RECV_TIMEOUT]` | `zmq_stub_conn.cpp` (~572) / `zmq_msg_queue.h` (~890) / `zmq_stub_impl.h` (~143) |
-| `[RPC_SERVICE_UNAVAILABLE]` | `zmq_stub_conn.cpp::BackendToFrontend/Outbound` (~223, ~1303) |
-| `[ZMQ_SEND_FAILURE_TOTAL]` | `src/datasystem/common/rpc/zmq/zmq_socket_ref.cpp::SendMsg` (~203) |
-| `[ZMQ_RECEIVE_FAILURE_TOTAL]` | `zmq_socket_ref.cpp::RecvMsg` (~167) |
-| `[ZMQ_RECV_TIMEOUT]` | `src/datasystem/common/rpc/zmq/zmq_socket.cpp::ZmqRecvMsg` (~79) |
-| `[URMA_NEED_CONNECT]` | `urma_manager.cpp`（多处）+ `worker_oc_service_get_impl.cpp::TryReconnectRemoteWorker` (~947) |
-| `[URMA_RECREATE_JFS]` | `urma_manager.cpp::HandleUrmaEvent` (~772) + `urma_resource.cpp::MarkAndRecreate` (~392,~407) |
-| `[URMA_RECREATE_JFS_FAILED]` | `urma_manager.cpp` (~779) |
-| `[URMA_RECREATE_JFS_SKIP]` | `urma_manager.cpp` (~784) + `urma_resource.cpp` (~370,~386,~398) |
-| `[URMA_POLL_ERROR]` | `urma_manager.cpp::ServerEventHandleThreadMain` (~625) |
-| `[URMA_WAIT_TIMEOUT]` | `urma_manager.cpp::WaitToFinish` (~732) |
-| `[HealthCheck] Worker is exiting now` | `src/datasystem/worker/object_cache/worker_oc_service_impl.cpp` (~371) |
-| `Cannot receive heartbeat from worker.` | `src/datasystem/client/listen_worker.cpp` (~114) |
-| `etcd is timeout` | `src/datasystem/master/replica_manager.cpp` (~1190) |
-| `etcd is unavailable` | `src/datasystem/worker/object_cache/service/worker_oc_service_get_impl.cpp` (~1631) |
-| `Get mmap entry failed` | `src/datasystem/client/object_cache/object_client_impl.cpp`（多处） |
-| `fallback to TCP/IP payload` | `src/datasystem/client/object_cache/client_worker_api/client_worker_base_api.cpp` (~117,~131) |
-
----
-
-### 附录 C · Metrics 完整清单（54 条）
-
-定义于 `src/datasystem/common/metrics/kv_metrics.{h,cpp}`（`KvMetricId` 枚举 + `KV_METRIC_DESCS`），`static_assert` 保证 `KV_METRIC_END = 54`。
+与 `yuanrong-datasystem` 主干一致时，`KvMetricId` 为 **0～53**，**`KV_METRIC_END` = 54**。定义在 `common/metrics/kv_metrics.{h,cpp}` 的 `KV_METRIC_DESCS`；发布版本若有增减，以代码库 `static_assert` 为准。下表供值班与 **§1 / §2** 对照 **grep Metrics Summary** 全文。
 
 | ID | 文本名 | 类型 | 单位 |
 |----|--------|------|------|
@@ -695,7 +761,7 @@ NOT_FOUND→K_OK 记账陷阱：
 | 25 | `zmq_send_try_again_total` | Counter | count |
 | 26 | `zmq_receive_try_again_total` | Counter | count |
 | 27 | `zmq_network_error_total` | Counter | count |
-| 28 | `zmq_last_error_number` | **Gauge** | — |
+| 28 | `zmq_last_error_number` | Gauge | — |
 | 29 | `zmq_gateway_recreate_total` | Counter | count |
 | 30 | `zmq_event_disconnect_total` | Counter | count |
 | 31 | `zmq_event_handshake_failure_total` | Counter | count |
@@ -724,97 +790,28 @@ NOT_FOUND→K_OK 记账陷阱：
 
 ---
 
-### 附录 D · 路径与关键 gflag
+## 附录 · 运维速查（无源码行号）
 
-#### D.1 日志路径来源
+### A. 日志与 Metrics 开关
 
-| 文件 | 代码出处 |
-|------|---------|
-| `${log_dir}` | gflag `--log_dir`（`common/util/gflag/common_gflag_define.cpp:28`） |
-| `${log_dir}/access.log` | `include/datasystem/common/constants.h:29` |
-| `${log_dir}/ds_client_access_<pid>.log` | `common/log/access_recorder.cpp:112-125`；可用 `DATASYSTEM_CLIENT_ACCESS_LOG_NAME` 覆盖 |
-| `${log_dir}/resource.log` | `common/metrics/res_metric_collector.cpp:61-62` |
-| `${log_dir}/datasystem_worker.INFO.log` | glog 默认命名 |
-| `${log_dir}/ds_client_<pid>.INFO.log` | glog 默认命名（SDK） |
-| `${log_dir}/request_out.log` | Worker 访问 etcd / OBS 子系统 |
+| 项 | 说明 |
+|----|------|
+| `$log_dir` | 由 `--log_dir` / 环境决定；下文路径均在其下 |
+| Worker / Client 运行日志 | `datasystem_worker.INFO.log`，`ds_client_<pid>.INFO.log` |
+| Client access log | `ds_client_access_<pid>.log` |
+| `resource.log` | 资源、线程池、`ETCD_*` 等聚合 |
+| `request_out.log` | Worker 访问 **etcd / OBS** 等三方请求轨迹 |
+| `log_monitor` | 默认 `true` |
+| `log_monitor_interval_ms` | 默认 `10000` |
+| `log_monitor_exporter` | 现场请用 **`harddisk`** 落盘 Summary |
+| Metrics Summary | `Total:` 与 `Compare with ...ms before:` 为 **delta 段**；时延看 Histogram 的 **max / P99↑** |
 
-#### D.2 gflag 默认值
+### B. 定界常用 metric（子集）
 
-| gflag | 默认 | 语义 |
-|-------|------|------|
-| `log_monitor` | `true` | Summary 总开关；关掉后 `Tick/PrintSummary` 空操作，内部累加仍继续 |
-| `log_monitor_interval_ms` | `10000` | Summary 实际打印周期（非 `Tick` 粒度） |
-| `log_monitor_exporter` | `"harddisk"` | **代码仅接受 `"harddisk"`**；其它值（含帮助文本的 `"backend"`）被 `ResMetricCollector::Init` reject 为 `K_INVALID` |
-| `log_dir` | `$GOOGLE_LOG_DIR` / glog 默认 | 控制所有日志路径 |
+**全量 ID 与名称见上文 §6。** 值班最常 grep 的延迟与故障计数：`client_rpc_get_latency`、`client_rpc_publish_latency`、`worker_process_get_latency`、`worker_process_publish_latency`、`worker_rpc_create_meta_latency`、`worker_urma_write_latency`、`worker_tcp_write_latency`、`zmq_send_io_latency`、`zmq_receive_io_latency`、`zmq_rpc_serialize_latency`、`zmq_rpc_deserialize_latency`、`zmq_send_failure_total`、`zmq_receive_failure_total`、`zmq_send_try_again_total`、`zmq_last_error_number`；降级对比 `client_*_urma_*_bytes` / `client_*_tcp_*_bytes`；SHM `worker_shm_ref_table_bytes`、`worker_allocator_*_bytes_total`、`worker_object_count`。
 
-#### D.3 Metrics Summary 格式源码
+### C. `resource.log` 值班 grep
 
-```167:169:src/datasystem/common/metrics/metrics.cpp
-    os << "Metrics Summary, version=" << VERSION << ", cycle=" << ++g_cycle
-       << ", interval=" << intervalMs << "ms\n\n";
-    os << "Total:\n" << total.str() << "\nCompare with "
-       << intervalMs << "ms before:\n" << delta.str();
-```
-
-`VERSION = "v0"`（`metrics.cpp:33`）。
-
-#### D.4 两种进程如何启 Metrics
-
-| 进程 | `InitKvMetrics` 位置 | `Tick` 驱动 |
-|------|---------------------|-------------|
-| **Worker** | `worker/worker_oc_server.cpp::WorkerOCServer::Start`（`ReadinessProbe()` 之后） | `worker/worker_main.cpp` 主循环每秒 `metrics::Tick()` |
-| **Client (SDK)** | `client/kv_cache/kv_client.cpp::Init/InitEmbedded`；`client/object_cache/object_client.cpp::Init` | `client/object_cache/object_client_impl.cpp::StartMetricsThread` 每 1s |
+优先：`SHARED_MEMORY`、`SPILL_HARD_DISK`、`OBJECT_COUNT`、各 `*_THREAD_POOL`（含 `WAITING_TASK_NUM`）、`ETCD_QUEUE`、`ETCD_REQUEST_SUCCESS_RATE`、`OC_HIT_NUM`。
 
 ---
-
-### 附录 E · `resource.log` 完整字段（22 项）
-
-定义于 `src/datasystem/common/metrics/res_metrics.def`，按序输出。
-
-| # | 字段 | 关键子项 |
-|---|------|---------|
-| 1 | `SHARED_MEMORY` | MEMORY_USAGE / PHYSICAL_MEMORY_USAGE / TOTAL_LIMIT / WORKER_SHARE_MEMORY_USAGE / SC_MEMORY_USAGE / SC_MEMORY_LIMIT |
-| 2 | `SPILL_HARD_DISK` | SPACE_USAGE / PHYSICAL_SPACE_USAGE / TOTAL_LIMIT |
-| 3 | `ACTIVE_CLIENT_COUNT` | — |
-| 4 | `OBJECT_COUNT` | — |
-| 5 | `OBJECT_SIZE` | — |
-| 6 | `WORKER_OC_SERVICE_THREAD_POOL` | IDLE_NUM / CURRENT_TOTAL_NUM / MAX_THREAD_NUM / WAITING_TASK_NUM / THREAD_POOL_USAGE |
-| 7 | `WORKER_WORKER_OC_SERVICE_THREAD_POOL` | 同上 |
-| 8 | `MASTER_WORKER_OC_SERVICE_THREAD_POOL` | 同上 |
-| 9 | `MASTER_OC_SERVICE_THREAD_POOL` | 同上 |
-| 10 | `ETCD_QUEUE` | CURRENT_SIZE / TOTAL_LIMIT / ETCD_QUEUE_USAGE |
-| 11 | `ETCD_REQUEST_SUCCESS_RATE` | SUCCESS_RATE |
-| 12 | `OBS_REQUEST_SUCCESS_RATE` | SUCCESS_RATE |
-| 13 | `MASTER_ASYNC_TASKS_THREAD_POOL` | 线程池五元组 |
-| 14 | `STREAM_COUNT` | — |
-| 15 | `WORKER_SC_SERVICE_THREAD_POOL` | 线程池五元组 |
-| 16 | `WORKER_WORKER_SC_SERVICE_THREAD_POOL` | 同上 |
-| 17 | `MASTER_WORKER_SC_SERVICE_THREAD_POOL` | 同上 |
-| 18 | `MASTER_SC_SERVICE_THREAD_POOL` | 同上 |
-| 19 | `STREAM_REMOTE_SEND_SUCCESS_RATE` | SUCCESS_RATE |
-| 20 | `SHARED_DISK` | USAGE / PHYSICAL_USAGE / TOTAL_LIMIT / USAGE_RATE |
-| 21 | `SC_LOCAL_CACHE` | USAGE / RESERVED_USAGE / TOTAL_LIMIT / USAGE_RATE |
-| 22 | `OC_HIT_NUM` | MEM_HIT_NUM / DISK_HIT_NUM / L2_HIT_NUM / REMOTE_HIT_NUM / MISS_NUM |
-
----
-
-### 附录 F · 对旧版文档的修正项
-
-1. `[TCP_CONN_WAIT_TIMEOUT]` 在代码里不存在 → 用 `[SOCK_CONN_WAIT_TIMEOUT]` / `[REMOTE_SERVICE_WAIT_TIMEOUT]`。
-2. `K_FILE_LIMIT_REACHED = 18`（不是 20，20 是 `K_DATA_INCONSISTENCY`）。
-3. etcd 两种字符串并存：Master `etcd is timeout`；Worker `etcd is unavailable`。
-4. SHM 泄漏旧 metric 名大多不存在；正确名以附录 C(ID 36–45) 为准。
-5. Metrics 总数 **54**（`KV_METRIC_END=54`），不是 36。
-6. 新增错误码 `K_URMA_CONNECT_FAILED = 1009`。
-7. `Cannot receive heartbeat from worker.` 完整带句点。
-8. `fallback to TCP/IP payload` 在代码中形如 `, fallback to TCP/IP payload.`。
-9. `log_monitor_exporter` 仅支持 `"harddisk"`（帮助文本提及的 `"backend"` 会被 reject）。
-
----
-
-### 附录 G · 维护约定
-
-1. 错误码变化 → 先改 `include/datasystem/utils/status.h`，再同步 §1.2 / §5.1 / 附录 A。
-2. 新增 `[PREFIX]` 标签 → 先落地代码、`rg '\[NEW_PREFIX\]' src/` 验证存在，再同步 §1.2 / §1.3 / §2.3 / 附录 B。
-3. 新增 metric → 追加到 `kv_metrics.cpp::KV_METRIC_DESCS` 末尾；更新附录 C 与 `KV_METRIC_END`。
-4. `resource.log` 字段顺序以 `res_metrics.def` 为单一事实源；附录 E 与之一一对应。
