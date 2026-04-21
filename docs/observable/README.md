@@ -28,6 +28,8 @@
 | 05 | [05-metrics-and-perf.md](05-metrics-and-perf.md) | 已落地的 ZMQ/KV metrics 清单（可运行时读取）+ 性能关键路径 + 采集命令 | `common/metrics/kv_metrics.{h,cpp}` / `zmq_socket_ref.cpp` |
 | 06 | [06-dependencies/](06-dependencies/README.md) | 外部/三方件依赖：URMA、OS syscall、etcd、二级存储 | — |
 | 07 | [07-pr-metrics-fault-localization.md](07-pr-metrics-fault-localization.md) | PR 串讲 (#583/#584/#586/#588) × 36 条 metric × 17 个日志标签 × 故障定界决策树，给测试/研发值班用 | `common/metrics/kv_metrics.cpp` / `zmq_socket_ref.cpp` / `urma_manager.cpp` |
+| 08 | [08-fault-triage-consolidated.md](08-fault-triage-consolidated.md) | **统一故障定位定界手册**：四大故障域（A 用户/B OS-控制面/C URMA/D 组件）× 错误码映射 × 结构化日志前缀 × metrics delta × 三阶段排障流程；合并原 `fema-intermediate/08,10,11` 并以代码为 ground truth 纠正差异 | `include/datasystem/utils/status.h` / `common/metrics/kv_metrics.cpp` / `common/rpc/zmq/` / `common/rdma/urma_manager.cpp` |
+| 09 | [09-observable-test-construction.md](09-observable-test-construction.md) | **可观测用例构造与验证指南**：把 08 的"看证据做定界"反向成"故障注入 → 期望证据 → 自动化判据"；给每个故障域提供 ST 骨架、`INJECT_POINT` / iptables / tc 注入手段、四维断言模板 | `tests/st/common/rpc/zmq/zmq_metrics_fault_test.cpp` / `common/inject/inject_point.h` / `scripts/testing/verify/*` |
 
 ## 工具与产物
 
