@@ -1,7 +1,5 @@
 # 故障测试构造与验收指南 v2.0
 
-> 整合日志指南 + Metrics + PR#652 SHM Leak Metrics
-
 ---
 
 ## 一、故障构造方法分类
@@ -184,7 +182,7 @@
 
 ---
 
-### 2.5 SHM内存泄漏（PR#652）
+### 2.5 SHM内存泄漏
 
 #### 【故障11】SHM内存泄漏
 ```
@@ -203,7 +201,6 @@
 Metrics验证：
   - worker_shm_alloc_total > worker_shm_free_total
   - worker_shm_ref_table_bytes > 0 并持续增长
-  - master_ttl_pending_total 可能堆积
 ```
 
 ---
@@ -212,8 +209,8 @@ Metrics验证：
 
 ### 3.1 必验项（每类故障都要验证）
 
-| 故障类型 | 观测指标 | 预期结果 | 验收✓ |
-|---------|---------|---------|-------|
+| 故障类型 | 观测指标 | 预期结果 | 验收 |
+|---------|---------|---------|------|
 | 网络闪断 | `zmq_send_failure_total` delta | > 0 | ☐ |
 | 网络闪断 | `[ZMQ_SEND_FAILURE_TOTAL]` | 有日志 | ☐ |
 | RPC超时 | `client_rpc_get_latency` max | > timeout | ☐ |
@@ -236,7 +233,7 @@ Metrics验证：
 | Metrics Summary | `grep "Metrics Summary, version=v0" log` | ≥2个周期 |
 | ZMQ Metrics | `grep "zmq_send_failure_total" log` | 有输出 |
 | URMA Metrics | `grep "urma_write_total_bytes" log` | 有输出 |
-| SHM Leak Metrics | `grep "worker_shm_ref_table" log` | 有输出(PR#652) |
+| SHM Metrics | `grep "worker_shm_ref_table" log` | 有输出 |
 | Histogram有效 | `grep "latency.*count=" log` | count > 0 |
 
 ---
@@ -291,7 +288,7 @@ echo "[FAULT INJECT] 新Worker PID: $NEW_PID"
 | **B类-控制面** | TCP/ZMQ/RPC标签 | ZMQ counters | code=1001/1002 | 网络故障注入 |
 | **C类-URMA** | URMA标签 | UB/TCP bytes | code=1004/1006 | UB故障注入 |
 | **D类-组件** | HealthCheck/etcd | worker metrics | code=23/31 | 进程故障注入 |
-| **D类-SHM泄漏** | SHM使用率 | PR#652新metrics | OBJECT_COUNT变化 | 内存泄漏场景 |
+| **D类-SHM泄漏** | SHM使用率 | SHM metrics | OBJECT_COUNT变化 | 内存泄漏场景 |
 
 ### 5.2 验证执行顺序
 ```
@@ -349,7 +346,7 @@ grep -c "fallback to TCP" $LOG
 echo "期望: ≥1 (如果有UB降级)"
 echo ""
 
-echo "6. SHM Leak Metrics 检查(PR#652)"
+echo "6. SHM Metrics 检查"
 grep -E "worker_shm_(alloc|free|ref_table)" $LOG | tail -5
 echo "期望: 有SHM分配/释放/钉住指标"
 echo ""

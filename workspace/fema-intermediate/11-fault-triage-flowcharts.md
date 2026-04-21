@@ -23,20 +23,20 @@
  │
  ├─ code=2/3/8 ────────────────────→ 用户层-A类
  │
- ├─ code=1001/1002/19 ─────────────→ OS层-B类
+ ├─ code=1001/1002/19 ─────────────→ OS层-控制面-B类
  │
  ├─ code=1004/1006/1008/1010 ─────→ URMA层-C类
  │
  ├─ code=23/31/32 ─────────────────→ 组件层-D类
  │
- └─ code=5/6/7/13/20/25 ───────────→ OS层-资源面
+ └─ code=5/6/7/13/20/25 ───────────→ 组件层-D类(Resources)
 ```
 
 ---
 
 ## 阶段二：识别关键问题（5分钟）
 
-### 2.1 OS层-B类(控制面) 诊断流程
+### 2.1 B类：OS层-控制面 诊断流程
 
 ```
 OS层-控制面故障
@@ -45,18 +45,22 @@ OS层-控制面故障
  ┌──────────────────────────────────────────────────┐
  │  检查结构化日志标签                                │
  │  [TCP_CONNECT_FAILED] / [TCP_CONNECT_RESET]      │
+ │  [TCP_CONN_WAIT_TIMEOUT] / [SHM_FD_TRANSFER_FAILED] │
  │  [RPC_RECV_TIMEOUT] / [RPC_SERVICE_UNAVAILABLE]  │
- │  [ZMQ_SEND_FAILURE_TOTAL]                        │
+ │  [ZMQ_SEND_FAILURE_TOTAL] / [ZMQ_RECEIVE_FAILURE_TOTAL] │
  └──────────────────────────────────────────────────┘
  │
  ├─ [TCP_CONNECT_FAILED] ─────────────────→ 端口不可达/防火墙
  ├─ [TCP_CONNECT_RESET] ──────────────────→ 对端Crash/网络闪断
+ ├─ [TCP_CONN_WAIT_TIMEOUT] ──────────────→ 建连等待超时
+ ├─ [SHM_FD_TRANSFER_FAILED] ────────────→ 共享内存fd传递失败
  ├─ [RPC_RECV_TIMEOUT] ───────────────────→ 网络拥塞/对端处理慢
  ├─ [ZMQ_SEND_FAILURE_TOTAL] ────────────→ ZMQ发送失败
  └─ [RPC_SERVICE_UNAVAILABLE] ────────────→ Worker进程退出
 
 Metrics检查:
  ├─ zmq_send_failure_total ↑ ─────────────→ ZMQ发送失败
+ ├─ zmq_receive_failure_total ↑ ──────────→ ZMQ接收失败
  ├─ client_rpc_get_latency max ↑ ────────→ RPC超时
  └─ ETCD_QUEUE ↑ ──────────────────────────→ etcd写入慢
 
@@ -66,7 +70,7 @@ Metrics检查:
  └─ RPC超时 ─────→ tc qdisc del dev eth0 root netem
 ```
 
-### 2.2 URMA层-C类 诊断流程
+### 2.2 C类：URMA层 诊断流程
 
 ```
 URMA层故障
@@ -99,7 +103,7 @@ Metrics检查:
  └─ worker_urma_write_latency max ↑ ─────→ JFS异常
 ```
 
-### 2.3 组件层-D类 诊断流程
+### 2.3 D类：组件层 诊断流程
 
 ```
 组件层故障
@@ -111,6 +115,7 @@ Metrics检查:
  │  Cannot receive heartbeat from worker            │
  │  etcd is timeout / Disconnected from remote node  │
  │  meta_is_moving = true                           │
+ │  Get mmap entry failed                           │
  └──────────────────────────────────────────────────┘
  │
  ├─ [HealthCheck] Worker is exiting ──────→ Worker退出
@@ -127,43 +132,18 @@ Metrics检查:
  │    原因: Master超时
  │    恢复: 检查etcd和网络
  │
- └─ meta_is_moving = true ───────────────→ 扩缩容中
-      处理: K_SCALING正常，SDK自动重试
+ ├─ meta_is_moving = true ───────────────→ 扩缩容中
+ │    处理: K_SCALING正常，SDK自动重试
+ │
+ └─ Get mmap entry failed ────────────────→ mmap申请失败
+      原因: ulimit -l 0 / fd超限
+      恢复: ulimit -l unlimited
 
 Metrics检查:
  ├─ worker_object_count ↓ ──────────────→ Worker退出
- ├─ SHARED_MEMORY ↑ ───────────────────→ 内存异常/SHM泄漏
+ ├─ SHARED_MEMORY ↑ ───────────────────→ 内存异常/泄漏
+ ├─ worker_shm_ref_table_bytes ↑ ───────→ SHM钉住泄漏
  └─ ETCD_REQUEST_SUCCESS_RATE ↓ ────────→ etcd问题
-```
-
-### 2.4 OS层-资源面 诊断流程
-
-```
-OS层-资源面故障
- │
- ▼
- ┌──────────────────────────────────────────────────┐
- │  检查错误码和日志                                 │
- │  K_OUT_OF_MEMORY(6) / K_RUNTIME_ERROR(5/7)       │
- │  K_NO_SPACE(13) / K_FILE_LIMIT_REACHED(20)      │
- │  K_MASTER_TIMEOUT(25)                            │
- └──────────────────────────────────────────────────┘
- │
- ├─ Get mmap entry failed ───────────────→ mmap申请失败
- │    原因: ulimit -l 0 / fd超限
- │    恢复: ulimit -l unlimited
- │
- ├─ K_OUT_OF_MEMORY ────────────────────→ 内存/shm池不足
- │    恢复: 等待内存释放/触发缓存淘汰
- │
- ├─ K_NO_SPACE ──────────────────────────→ 磁盘空间满
- │    恢复: 清理磁盘/扩容
- │
- ├─ K_FILE_LIMIT_REACHED ────────────────→ fd资源耗尽
- │    恢复: 检查fd使用情况
- │
- └─ K_MASTER_TIMEOUT ────────────────────→ etcd不可用
-      恢复: 检查etcd集群状态
 ```
 
 ---
@@ -175,10 +155,9 @@ OS层-资源面故障
 | 故障域 | 日志检查 | Metrics检查 | 处理建议 |
 |-------|---------|------------|---------|
 | **用户层-A** | respMsg关键字 | 无特殊 | 检查业务参数/Init顺序 |
-| **OS层-B** | ZMQ/TCP/RPC标签 | zmq_send_failure_total | 检查网络状态 |
-| **URMA层-C** | URMA标签 | UB/TCP bytes | 检查UB设备 |
-| **组件层-D** | HealthCheck标签 | worker_object_count | 检查Worker状态 |
-| **OS层-资源** | etcd/mmap标签 | ETCD_QUEUE | 检查系统资源 |
+| **OS层-控制面-B** | [TCP_*]/[ZMQ_*]/[RPC_*]标签 | zmq_send_failure_total | 检查网络状态 |
+| **URMA层-C** | [URMA_*]标签 | UB/TCP bytes | 检查UB设备 |
+| **组件层-D** | [HealthCheck]标签 | worker_object_count | 检查Worker状态 |
 
 ### 3.2 故障恢复措施速查表
 
@@ -193,31 +172,6 @@ OS层-资源面故障
 | 心跳超时 | `kill -CONT <worker_pid>` | 心跳恢复 |
 | etcd超时 | `systemctl start etcd` | `etcd is timeout`消失 |
 | mmap失败 | `ulimit -l unlimited` | `Get mmap entry failed`消失 |
-
-### 3.3 自证清白验证流程
-
-```
-┌─────────────────────────────────────────┐
-│ 自证清白公式                             │
-│ RPC框架占比 = (ser + deser) /            │
-│              (send + recv + ser + deser) │
-└─────────────────────────────────────────┘
- │
- ▼
-┌─────────────────┐
-│ 框架占比 > 20%? │──→ Yes ─→ 瓶颈在序列化
-└─────────────────┘
- │No
- ▼
-┌─────────────────┐
-│ I/O占比 > 80%?  │──→ Yes ─→ 瓶颈在网络
-└─────────────────┘
- │No
- ▼
-┌─────────────────┐
-│ 全部都低?       │──→ Yes ─→ 瓶颈不在RPC栈
-└─────────────────┘
-```
 
 ---
 
@@ -243,7 +197,7 @@ grep "HealthCheck.*exiting" /logs/datasystem_worker.INFO.log
 # 查etcd问题
 grep "etcd is timeout" /logs/datasystem_worker.INFO.log
 
-# 查SHM泄漏
+# 查SHM相关
 grep "worker_shm_ref_table" /logs/datasystem_worker.INFO.log
 ```
 

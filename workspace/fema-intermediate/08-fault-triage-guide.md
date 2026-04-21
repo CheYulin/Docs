@@ -1,6 +1,6 @@
 # KVCache 故障定位定界指南：三板斧手册
 
-> **文档版本**：v2.0（整合日志指南 + Metrics + PR#652 SHM Leak Metrics）
+> **文档版本**：v2.0
 >
 > **面向读者**：功能测试 / 集成测试工程师 / 研发值班
 >
@@ -10,18 +10,16 @@
 
 ## 日志体系全景图
 
-### 6类日志文件
+### 日志文件
 
 | 序号 | 类型 | 路径 | 用途 |
 |------|------|------|------|
 | 1 | Worker运行日志 | `/logs/datasystem_worker.INFO.log` | ERROR/WARN/INFO文本日志 |
 | 2 | Worker访问日志 | `/logs/access.log` | POSIX接口请求（需开启log_monitor） |
-| 3 | **Worker资源日志** | `/logs/resource.log` | 周期聚合资源指标（22字段） |
+| 3 | **Worker资源日志** | `/logs/resource.log` | 周期聚合资源指标 |
 | 4 | 第三方请求日志 | `/logs/request_out.log` | Worker访问ETCD/OBS记录 |
-| 5 | 流缓存指标日志 | `/logs/sc_metrics.log` | 流缓存运行数据 |
-| 6 | 容器进程日志 | `/logs/container.log` | Worker进程生命周期 |
-| 7 | Client运行日志 | `/path/client/ds_client_{pid}.INFO.log` | SDK运行日志 |
-| 8 | **Client访问日志** | `/path/client/ds_client_access_{pid}.log` | SDK访问日志 |
+| 5 | Client运行日志 | `/path/client/ds_client_{pid}.INFO.log` | SDK运行日志 |
+| 6 | **Client访问日志** | `/path/client/ds_client_access_{pid}.log` | SDK访问日志 |
 
 ### Metrics周期打印
 
@@ -45,10 +43,10 @@
 现象（成功率↓ / P99↑ / 抖动）
  │
  ├─ 第一板斧：归类 → 看到哪一大类问题
- │    ├─ A类：业务层错误（参数/语义/未Init）
- │    ├─ B类：控制面/OS层（RPC/ZMQ/网络/etcd）
- │    ├─ C类：数据面/URMA层（UB设备/驱动/CQ）
- │    └─ D类：组件层（Worker重启/扩缩容/内存泄漏）
+ │    ├─ A类：用户层错误（参数/NotFound/未Init）
+ │    ├─ B类：OS层-控制面（RPC/ZMQ/网络）
+ │    ├─ C类：URMA层（UB设备/连接/CQ）
+ │    └─ D类：组件层（Worker/etcd/内存）
  │
  ├─ 第二板斧：分流 → 下一步查什么
  │    ├─ 日志关键字
@@ -68,39 +66,38 @@
 ```
  ┌─ 用户层(A) ─────────────────────────────────────────┐
  │  K_INVALID(2) / K_NOT_FOUND(3) / K_NOT_READY(8)     │
- │  → 检查业务参数/Init顺序                              │
- │  → respMsg关键字 / access log code                   │
+ │  → 查respMsg关键字 / 检查业务参数                     │
  └─────────────────────────────────────────────────────┘
  │
-┌─ 成功率↓/P99↑ ─┼─ OS层(B) ────────────────────────────────┐
+┌─ 成功率↓/P99↑ ─┼─ OS层-控制面(B) ─────────────────────────┐
 │                │  K_RPC_*(1001/1002) / K_TRY_AGAIN(19)     │
-│                │  → ZMQ/TCP标签 + metrics                    │
-│                │  关注: [TCP_CONNECT_FAILED] / [RPC_RECV_   │
-│                │        TIMEOUT] / [ZMQ_SEND_FAILURE_TOTAL]  │
+│                │  → 查[TCP_*] / [ZMQ_*] / [RPC_*]结构化日志  │
+│                │  关注: [TCP_CONNECT_FAILED] / [ZMQ_SEND_   │
+│                │        FAILURE_TOTAL] / [RPC_RECV_TIMEOUT]  │
 │                └────────────────────────────────────────────┘
 │                              │
-└──────────────┼─ URMA层(C) ────────────────────────────────┐
-               │  K_URMA_*(1004/1006/1008/1010)              │
-               │  → URMA标签 + UB/TCP bytes                  │
-               │  关注: [URMA_NEED_CONNECT] / [URMA_RECREATE_ │
-               │        JFS] / fallback to TCP               │
-               └────────────────────────────────────────────┘
+└──────────────┼─ URMA层(C) ─────────────────────────────────────┐
+               │  K_URMA_*(1004/1006/1008/1010)                     │
+               │  → 查[URMA_*]标签 + UB/TCP bytes                   │
+               │  关注: [URMA_NEED_CONNECT] / [URMA_RECREATE_JFS]  │
+               │  关注: fallback to TCP                              │
+               └────────────────────────────────────────────────────┘
                               │
  ┌─ 组件层(D) ─────────────────────────────────────────┐
  │  K_CLIENT_WORKER_DISCONNECT(23)                      │
  │  K_SCALE_DOWN(31) / K_SCALING(32)                    │
- │  SHM Leak (PR#652)                                   │
- │  → Worker状态/etcd/memory                            │
+ │  K_OUT_OF_MEMORY(6) / K_MASTER_TIMEOUT(25)          │
+ │  → 查[HealthCheck]标签 / etcd状态 / 内存指标         │
  │  关注: [HealthCheck] Worker is exiting now           │
- │  关注: Cannot receive heartbeat / etcd is timeout    │
+ │  关注: Cannot receive heartbeat / etcd is timeout   │
  └─────────────────────────────────────────────────────┘
 ```
 
 **说明**：
 - **A类(用户层)**：业务参数问题，直接看respMsg
-- **B类(OS层-控制面)**：RPC/ZMQ/网络问题，看结构化日志标签
+- **B类(OS层-控制面)**：RPC/ZMQ/TCP网络问题，看结构化日志标签
 - **C类(URMA层)**：UB/URMA硬件问题，看URMA标签和降级指标
-- **D类(组件层)**：Worker/etcd/SHM问题，看HealthCheck和资源指标
+- **D类(组件层)**：Worker心跳/etcd/内存问题，看HealthCheck和资源指标
 
 ---
 
@@ -118,7 +115,7 @@
  │    └─ → 用户层问题，检查业务参数/Init顺序
  │
  ├─ 是 1001/1002/19 (RPC超时/不可达)？
- │    └─ → OS层-控制面，查ZMQ/TCP日志标签
+ │    └─ → OS层-控制面，查[TCP_*]/[ZMQ_*]日志标签
  │
  ├─ 是 1004/1006/1008/1010 (URMA族)？
  │    └─ → URMA层，查UB设备/驱动/CQ指标
@@ -127,24 +124,24 @@
  │    └─ → 组件层，查Worker状态/etcd
  │
  └─ 是 5/6/7/13/20/25 (OS资源/IO)？
-      └─ → OS层-资源面，查内存/磁盘/fd/etcd指标
+      └─ → 组件层-Resources，查内存/磁盘/fd/etcd指标
 ```
 
-### 1.2 错误码 → 故障域映射表（完整版）
+### 1.2 错误码 → 故障域映射表
 
 | 错误码 | 枚举名 | 故障域 | 优先怀疑方向 |
 |-------|--------|-------|-------------|
 | `0` | K_OK | ⚠️陷阱 | Get的NOT_FOUND被映射为0，需看respMsg |
 | `2` | K_INVALID | **用户层** | 入参校验失败、参数非法 |
 | `3` | K_NOT_FOUND | **用户层** | key不存在（非故障） |
-| `5/7` | K_RUNTIME_ERROR | **OS层-资源面** | mmap失败、IO错误 |
-| `6` | K_OUT_OF_MEMORY | **OS层-资源面** | 内存/shm池不足 |
+| `5/7` | K_RUNTIME_ERROR | **组件层-Resources** | mmap失败、IO错误 |
+| `6` | K_OUT_OF_MEMORY | **组件层-Resources** | 内存/shm池不足 |
 | `8` | K_NOT_READY | **用户层** | 未Init或正在ShutDown |
-| `13` | K_NO_SPACE | **OS层-资源面** | 磁盘空间满 |
+| `13` | K_NO_SPACE | **组件层-Resources** | 磁盘空间满 |
 | `19` | K_TRY_AGAIN | **OS层-控制面** | 服务端忙、瞬时可恢复 |
-| `20` | K_FILE_LIMIT_REACHED | **OS层-资源面** | fd资源耗尽 |
+| `20` | K_FILE_LIMIT_REACHED | **组件层-Resources** | fd资源耗尽 |
 | `23` | K_CLIENT_WORKER_DISCONNECT | **组件层** | 心跳断开/Worker退出 |
-| `25` | K_MASTER_TIMEOUT | **OS层-资源面** | etcd不可用/节点超时 |
+| `25` | K_MASTER_TIMEOUT | **组件层-Resources** | etcd不可用/节点超时 |
 | `31` | K_SCALE_DOWN | **组件层** | Worker退出中（非用户错误） |
 | `32` | K_SCALING | **组件层** | 扩缩容中（SDK已自动重试） |
 | `1001` | K_RPC_DEADLINE_EXCEEDED | **OS层-控制面** | RPC超时（网络/对端/拥塞） |
@@ -162,18 +159,16 @@
 
 #### 特征
 - 错误码：K_INVALID(2), K_NOT_FOUND(3), K_NOT_READY(8)
-- Access log：respMsg含具体校验失败原因
+- Client访问日志：respMsg含具体校验失败原因
 
-#### 查什么
-
-**Access log格式**（8号日志）：
+#### Access log格式
 ```
 code | handleName | microseconds | dataSize | reqMsg | respMsg
   ↑      ↑            ↑            ↑         ↑         ↑
  错误码  接口名        耗时(μs)     数据大小   请求参数   响应信息
 ```
 
-**respMsg关键字**：
+#### respMsg关键字
 | respMsg关键词 | 含义 | 处理建议 |
 |-------------|------|---------|
 | `The objectKey is empty` | key为空字符串 | 业务校验 |
@@ -202,25 +197,22 @@ grep "K_NOT_FOUND" /path/client/ds_client_access_{pid}.log
 - 错误码：K_RPC_DEADLINE_EXCEEDED(1001), K_RPC_UNAVAILABLE(1002), K_TRY_AGAIN(19)
 - access log：microseconds贴timeout / respMsg含网络关键字
 
-#### 查什么
-
-**1. 结构化日志标签（#583）**：
+#### 结构化日志标签
 
 | 标签 | 源码位置 | 触发语义 |
 |------|----------|---------|
 | `[TCP_CONNECT_FAILED]` | `unix_sock_fd.cpp::ConnectTcp` | addrinfo遍历完无法connect() |
 | `[TCP_CONNECT_RESET]` | `unix_sock_fd.cpp::ErrnoToStatus` | ECONNRESET / EPIPE |
 | `[TCP_NETWORK_UNREACHABLE]` | `zmq_stub_conn.cpp::SendHeartBeats` | ZMQ_POLLOUT失败 |
+| `[TCP_CONN_WAIT_TIMEOUT]` | `zmq_stub_conn.cpp::WaitForConnected` | 连接建立等待超时 |
+| `[SHM_FD_TRANSFER_FAILED]` | `client_worker_common_api.cpp::Connect` | 传shm fd辅助连接失败 |
 | `[RPC_RECV_TIMEOUT]` | `zmq_stub_impl.h::Recv` | client等应答超时 |
 | `[RPC_SERVICE_UNAVAILABLE]` | `zmq_stub_conn.cpp::BackendToFrontend` | 服务端把错误回包 |
-| `[SOCK_CONN_WAIT_TIMEOUT]` | `zmq_stub_conn.cpp::WaitForConnected` | 连接建立等待超时 |
-| `[UDS_CONNECT_FAILED]` | `unix_sock_fd.cpp::Connect` | UDS connect()失败 |
-| `[SHM_FD_TRANSFER_FAILED]` | `client_worker_common_api.cpp::Connect` | 传shm fd辅助连接失败 |
 | `[ZMQ_SEND_FAILURE_TOTAL]` | `zmq_socket_ref.cpp::SendMsg` | zmq_msg_send硬失败 |
 | `[ZMQ_RECEIVE_FAILURE_TOTAL]` | `zmq_socket_ref.cpp::RecvMsg` | zmq_msg_recv硬失败 |
 | `[ZMQ_RECV_TIMEOUT]` | `zmq_socket.cpp::ZmqRecvMsg` | 阻塞recv超时 |
 
-**2. ZMQ Metrics指标**：
+#### ZMQ Metrics指标
 
 | Metric | 含义 | 故障信号 |
 |--------|-----|---------|
@@ -231,39 +223,6 @@ grep "K_NOT_FOUND" /path/client/ds_client_access_{pid}.log
 | `zmq_gateway_recreate_total` | 网关重建 | delta>0 |
 | `zmq_event_disconnect_total` | 断开事件 | delta>0 |
 | `zmq_event_handshake_failure_total` | 握手失败 | delta>0 |
-| `zmq_send_io_latency` | 发送耗时 | avg判断 |
-| `zmq_receive_io_latency` | 接收耗时 | avg判断 |
-
-**3. Worker resource.log关键字段**：
-
-| 顺序 | 指标 | 含义 | 故障信号 |
-|------|------|------|---------|
-| 6 | `WORKER_OC_SERVICE_THREAD_POOL` | RPC线程池 | waiting↑/rate贴满 |
-| 7 | `WORKER_WORKER_OC_SERVICE_THREAD_POOL` | Worker间RPC池 | 跨机读变慢 |
-| 10 | `ETCD_QUEUE` | etcd写队列 | 堆积→控制面受阻 |
-| 11 | `ETCD_REQUEST_SUCCESS_RATE` | etcd成功率 | 下降→etcd问题 |
-| 22 | `OC_HIT_NUM` | 缓存命中率 | mem/disk/l2/remote/miss |
-
-#### grep模板
-```bash
-# 1. 查TCP建连失败
-grep -E "\[TCP_CONNECT_FAILED\]|\[TCP_CONNECT_RESET\]|\[TCP_NETWORK_UNREACHABLE\]" /logs/datasystem_worker.INFO.log
-
-# 2. 查RPC超时
-grep -E "\[RPC_RECV_TIMEOUT\]|\[RPC_SERVICE_UNAVAILABLE\]" /logs/datasystem_worker.INFO.log
-
-# 3. 查ZMQ失败
-grep -E "\[ZMQ_SEND_FAILURE_TOTAL\]|\[ZMQ_RECEIVE_FAILURE_TOTAL\]|\[ZMQ_RECV_TIMEOUT\]" /logs/datasystem_worker.INFO.log
-
-# 4. 查网关重建
-grep "zmq_gateway_recreate_total" /logs/datasystem_worker.INFO.log
-
-# 5. 查resource.log线程池
-grep "SERVICE_THREAD_POOL" /logs/resource.log
-
-# 6. 查etcd指标
-grep -E "ETCD_QUEUE|ETCD_REQUEST_SUCCESS_RATE" /logs/resource.log
-```
 
 #### 定位定界表
 
@@ -272,9 +231,23 @@ grep -E "ETCD_QUEUE|ETCD_REQUEST_SUCCESS_RATE" /logs/resource.log
 | `[TCP_CONNECT_FAILED]` + `zmq_last_error_number=111` | 端口不可达 | 检查Worker进程/端口 |
 | `[TCP_CONNECT_RESET]` + `zmq_network_error_total`↑ | 对端崩溃/网络闪断 | 检查对端Worker状态 |
 | `[RPC_RECV_TIMEOUT]` + ZMQ fault counters=0 | 对端处理慢/队列满 | 查Worker负载/CPU |
+| `[ZMQ_SEND_FAILURE_TOTAL]` | ZMQ发送失败 | iptables规则/网络闪断 |
 | `zmq_gateway_recreate_total`↑ + `zmq_event_disconnect_total`↑ | 连接被重置 | 正常恢复 |
-| `ETCD_QUEUE`堆积 | etcd写入阻塞 | 检查etcd集群 |
-| `ETCD_REQUEST_SUCCESS_RATE`下降 | etcd集群问题 | 优先恢复etcd |
+
+#### grep模板
+```bash
+# 查TCP建连失败
+grep -E "\[TCP_CONNECT_FAILED\]|\[TCP_CONNECT_RESET\]" /logs/datasystem_worker.INFO.log
+
+# 查RPC超时
+grep -E "\[RPC_RECV_TIMEOUT\]|\[RPC_SERVICE_UNAVAILABLE\]" /logs/datasystem_worker.INFO.log
+
+# 查ZMQ失败
+grep -E "\[ZMQ_SEND_FAILURE_TOTAL\]|\[ZMQ_RECEIVE_FAILURE_TOTAL\]" /logs/datasystem_worker.INFO.log
+
+# 查shm fd传递失败
+grep "\[SHM_FD_TRANSFER_FAILED\]" /logs/datasystem_worker.INFO.log
+```
 
 ---
 
@@ -284,9 +257,7 @@ grep -E "ETCD_QUEUE|ETCD_REQUEST_SUCCESS_RATE" /logs/resource.log
 - 错误码：K_URMA_ERROR(1004), K_URMA_NEED_CONNECT(1006), K_URMA_TRY_AGAIN(1008), K_URMA_WAIT_TIMEOUT(1010)
 - 日志含URMA关键字 / UB降级TCP
 
-#### 查什么
-
-**1. 结构化日志标签（#583）**：
+#### 结构化日志标签
 
 | 标签 | 源码位置 | 触发语义 |
 |------|----------|---------|
@@ -297,7 +268,7 @@ grep -E "ETCD_QUEUE|ETCD_REQUEST_SUCCESS_RATE" /logs/resource.log
 | `[URMA_POLL_ERROR]` | `urma_manager.cpp::ServerEventHandleThreadMain` | PollJfcWait报错 |
 | `[URMA_WAIT_TIMEOUT]` | `urma_manager.cpp::WaitToFinish` | URMA事件等待超时 |
 
-**2. URMA Metrics指标**：
+#### URMA Metrics指标
 
 | Metric | 含义 | 故障信号 |
 |--------|-----|---------|
@@ -306,29 +277,10 @@ grep -E "ETCD_QUEUE|ETCD_REQUEST_SUCCESS_RATE" /logs/resource.log
 | `client_get_urma_read_total_bytes` | UB读字节 | 降级时为0 |
 | `client_get_tcp_read_total_bytes` | TCP读字节（降级） | 降级时↑ |
 | `worker_urma_write_latency` | UB写延迟 | max飙升 |
-| `worker_tcp_write_latency` | TCP写延迟 | 对比用 |
 
-**3. 降级判断**：
+#### 降级判断
 - 日志：`fallback to TCP/IP payload`
 - `tcp_xxx_bytes`↑ 且 `urma_xxx_bytes`不涨
-
-#### grep模板
-```bash
-# 1. 查URMA连接问题
-grep -E "\[URMA_NEED_CONNECT\]" /logs/datasystem_worker.INFO.log
-
-# 2. 查JFS重建
-grep -E "\[URMA_RECREATE_JFS\]" /logs/datasystem_worker.INFO.log
-
-# 3. 查URMA错误
-grep -E "\[URMA_POLL_ERROR\]|\[URMA_WAIT_TIMEOUT\]" /logs/datasystem_worker.INFO.log
-
-# 4. 查UB降级
-grep "fallback to TCP/IP payload" /logs/datasystem_worker.INFO.log
-
-# 5. 查URMA bytes指标
-grep -E "urma_write_total_bytes|tcp_write_total_bytes" /logs/datasystem_worker.INFO.log
-```
 
 #### 定位定界表
 
@@ -340,17 +292,27 @@ grep -E "urma_write_total_bytes|tcp_write_total_bytes" /logs/datasystem_worker.I
 | `fallback to TCP/IP payload` 突增 | UB设备/链路故障 | 检查UB端口 |
 | `worker_urma_write_latency` max飙升 | UB设备延迟 | 查硬件问题 |
 
+#### grep模板
+```bash
+# 查URMA连接问题
+grep -E "\[URMA_NEED_CONNECT\]" /logs/datasystem_worker.INFO.log
+
+# 查JFS重建
+grep -E "\[URMA_RECREATE_JFS\]" /logs/datasystem_worker.INFO.log
+
+# 查UB降级
+grep "fallback to TCP/IP payload" /logs/datasystem_worker.INFO.log
+```
+
 ---
 
-### 2.4 D类：组件层问题（含内存泄漏）
+### 2.4 D类：组件层问题
 
 #### 特征
-- 错误码：K_SCALE_DOWN(31), K_SCALING(32), K_CLIENT_WORKER_DISCONNECT(23)
-- resource.log：内存/metrics异常
+- 错误码：K_SCALE_DOWN(31), K_SCALING(32), K_CLIENT_WORKER_DISCONNECT(23), K_OUT_OF_MEMORY(6), K_MASTER_TIMEOUT(25)
+- 日志含HealthCheck关键字 / etcd超时 / 内存指标异常
 
-#### 查什么
-
-**1. 日志关键字**：
+#### 日志关键字
 
 ```
 [HealthCheck] Worker is exiting now     → Worker退出中
@@ -358,70 +320,31 @@ Cannot receive heartbeat from worker   → 心跳超时
 etcd is timeout                       → etcd超时
 Disconnected from remote node         → 节点与etcd断开
 meta_is_moving = true                 → 扩缩容中
+Get mmap entry failed                 → mmap申请失败
 ```
 
-**2. resource.log关键指标**：
+#### resource.log关键指标
 
 | 顺序 | 指标 | 含义 | 故障信号 |
 |------|------|------|---------|
-| 1 | `SHARED_MEMORY` | 共享内存使用率 | 突增→泄漏 |
-| 3 | `ACTIVE_CLIENT_COUNT` | 已建连客户端数 | 异常→连接泄漏 |
+| 1 | `SHARED_MEMORY` | 共享内存使用率 | 突增→异常 |
 | 4 | `OBJECT_COUNT` | 对象个数 | 异常变化 |
-| 5 | `OBJECT_SIZE` | 对象总大小 | 突增→内存泄漏 |
-| 20 | `SHARED_DISK` | 共享磁盘用量 | 异常 |
+| 5 | `OBJECT_SIZE` | 对象总大小 | 突增→内存异常 |
+| 10 | `ETCD_QUEUE` | etcd写队列 | 堆积→控制面受阻 |
+| 11 | `ETCD_REQUEST_SUCCESS_RATE` | etcd成功率 | 下降→etcd问题 |
 | 22 | `OC_HIT_NUM` | 缓存命中率 | miss突增 |
 
-**3. PR#652 新增SHM Leak Metrics（KvMetricId 36-53）**：
-
-| ID | Metric名 | 类型 | 含义 |
-|----|---------|------|------|
-| 36 | `worker_shm_alloc_total` | Counter | Worker shm分配总次数 |
-| 37 | `worker_shm_free_total` | Counter | Worker shm释放总次数 |
-| 38 | `worker_shm_alloc_bytes` | Counter | Worker shm分配总字节数 |
-| 39 | `worker_shm_free_bytes` | Counter | Worker shm释放总字节数 |
-| 40 | `worker_shm_ref_table_bytes` | Gauge | memoryRefTable_钉住的字节数 |
-| 41 | `worker_shm_unit_ref_count` | Gauge | ShmUnit被shared_ptr钉住计数 |
-| 42 | `worker_meta_erase_total` | Counter | 元数据erase总次数 |
-| 43 | `master_ttl_pending_total` | Counter | Master TTL pending数 |
-| 44 | `master_ttl_fire_total` | Counter | Master TTL fire数 |
-| 45 | `master_ttl_success_total` | Counter | Master TTL success数 |
-| 46 | `master_ttl_failed_total` | Counter | Master TTL failed数 |
-| 47 | `master_ttl_retry_total` | Counter | Master TTL retry数 |
-| 48 | `master_meta_leak_bytes` | Gauge | Master元数据泄漏字节数 |
-| 49 | `client_async_release_skip_total` | Counter | Client异步释放跳过次数 |
-| 50 | `client_async_release_lag_ms` | Gauge | Client异步释放滞后毫秒数 |
-| 51-53 | (预留扩展) | - | - |
-
-#### SHM Leak判断方法
+#### SHM内存泄漏判断
 ```
-内存泄漏特征（PR#652现场）：
-  - shm.memUsage 100s内从 3.58GB → 37.5GB (rate=0.999)
+特征：
+  - shm.memUsage 100s内从 3.58GB → 37.5GB
   - OBJECT_COUNT 从 438 → 37 (反向于OBJECT_SIZE)
-  - 原因：元数据已删但物理shm仍被memoryRefTable_钉住
 
 判断公式：
-  alloc - free 持续涨 + worker_shm_ref_table_bytes 持续涨 + OBJECT_COUNT 持平
-```
-
-#### grep模板
-```bash
-# 1. 查Worker退出
-grep -E "\[HealthCheck\] Worker is exiting now|Cannot receive heartbeat" /logs/datasystem_worker.INFO.log
-
-# 2. 查etcd问题
-grep -E "etcd is timeout|Disconnected from remote node" /logs/datasystem_worker.INFO.log
-
-# 3. 查扩缩容
-grep -E "meta_is_moving|Scale down|K_SCALING" /logs/datasystem_worker.INFO.log
-
-# 4. 查SHM泄漏指标（Metrics Summary中）
-grep -E "worker_shm_(alloc|free|ref_table)" /logs/datasystem_worker.INFO.log
-
-# 5. 查resource.log内存
-grep "SHARED_MEMORY" /logs/resource.log
-
-# 6. 查对象数量异常
-grep "OBJECT_COUNT|OBJECT_SIZE" /logs/resource.log
+  worker_shm_alloc_total > worker_shm_free_total
+  + worker_shm_ref_table_bytes 持续涨
+  + OBJECT_COUNT 持平
+  = 物理shm仍被钉住
 ```
 
 #### 定位定界表
@@ -429,10 +352,28 @@ grep "OBJECT_COUNT|OBJECT_SIZE" /logs/resource.log
 | 标签/指标组合 | 根因判断 | 处理建议 |
 |--------------|---------|---------|
 | `[HealthCheck] Worker is exiting now` | Worker主动退出 | k8s自动拉起 |
-| `SHARED_MEMORY`突增 + `worker_shm_ref_table_bytes`涨 | SHM内存泄漏 | PR#652新metrics定位 |
-| `ACTIVE_CLIENT_COUNT`异常高 | 连接泄漏 | 检查客户端断开 |
+| `Cannot receive heartbeat from worker` | 心跳超时 | 检查Worker状态 |
+| `SHARED_MEMORY`突增 + `worker_shm_ref_table_bytes`涨 | 内存泄漏 | 检查ref_table钉住 |
 | `etcd is timeout` 持续 | etcd集群故障 | 紧急介入 |
 | `OBJECT_COUNT` 突降 | Worker重启/数据丢失 | 检查稳定性 |
+
+#### grep模板
+```bash
+# 查Worker退出
+grep -E "\[HealthCheck\] Worker is exiting now|Cannot receive heartbeat" /logs/datasystem_worker.INFO.log
+
+# 查etcd问题
+grep -E "etcd is timeout|Disconnected from remote node" /logs/datasystem_worker.INFO.log
+
+# 查扩缩容
+grep -E "meta_is_moving|Scale down|K_SCALING" /logs/datasystem_worker.INFO.log
+
+# 查内存指标
+grep -E "worker_shm_(alloc|free|ref_table)" /logs/datasystem_worker.INFO.log
+
+# 查resource.log内存
+grep "SHARED_MEMORY" /logs/resource.log
+```
 
 ---
 
@@ -450,8 +391,6 @@ grep "OBJECT_COUNT|OBJECT_SIZE" /logs/resource.log
 
 3. 最后看Histogram的max
    client_rpc_get_latency,count=+500,avg=800us,max=50000us
-                                               ↑
-                                          P99在这里
 ```
 
 ### 3.2 P99劣化定位查表
@@ -473,17 +412,6 @@ grep "OBJECT_COUNT|OBJECT_SIZE" /logs/resource.log
 | 降级TCP↑ | `client_get_tcp_read_total_bytes`↑ | `fallback to TCP/IP payload` | UB设备问题 |
 | etcd超时↑ | `worker_rpc_create_meta_latency` max | `etcd is timeout` | etcd集群问题 |
 
-### 3.4 自证清白公式
-
-```
-RPC框架占比 = (ser + deser) / (send + recv + ser + deser)
-
-判断：
-- 框架占比 > 20% → 瓶颈在序列化
-- I/O占比 > 80% → 瓶颈在网络
-- 所有avg都低 → 瓶颈不在RPC栈
-```
-
 ---
 
 ## 附录A：故障构造与验收指南
@@ -498,7 +426,7 @@ RPC框架占比 = (ser + deser) / (send + recv + ser + deser)
 | **UB降级TCP** | ifconfig ub0 down | TCP bytes↑, URMA bytes=0 | `fallback to TCP/IP payload` |
 | **JFS重建** | 触发cqeStatus=9 | `worker_urma_write_latency` max↑ | `[URMA_RECREATE_JFS]` |
 | **etcd超时** | systemctl stop etcd | `K_MASTER_TIMEOUT` | `etcd is timeout` |
-| **SHM内存泄漏** | 模拟ref_table钉住 | `worker_shm_ref_table_bytes`涨 | - |
+| **内存泄漏** | 模拟ref_table钉住 | `worker_shm_ref_table_bytes`涨 | - |
 | **Worker退出** | kill -9 Worker | `worker_object_count`↓ | `[HealthCheck] exiting` |
 
 ### A.2 验收Checklist
@@ -506,12 +434,7 @@ RPC框架占比 = (ser + deser) / (send + recv + ser + deser)
 **基础观测能力**：
 - [ ] Worker日志有 `Metrics Summary, version=v0, cycle=...`
 - [ ] Client日志有 `Metrics Summary, version=v0, cycle=...`
-- [ ] resource.log有22字段输出
-
-**PR#652 SHM Leak Metrics验证**：
-- [ ] `worker_shm_alloc_total` / `worker_shm_free_total` 有值
-- [ ] `worker_shm_ref_table_bytes` 可观测
-- [ ] 内存泄漏场景可触发告警
+- [ ] resource.log有资源指标输出
 
 **故障注入验证**：
 - [ ] ZMQ故障：`zmq_send_failure_total` delta > 0
@@ -556,9 +479,6 @@ grep -E "\[(TCP|ZMQ|RPC|SOCK)_" /logs/datasystem_worker.INFO.log
 # 查Metrics delta
 grep "Compare with" /logs/datasystem_worker.INFO.log | tail -3
 
-# 查access错误分布
-grep "DS_KV_CLIENT_GET" /path/client/ds_client_access_{pid}.log | awk -F'|' '{print $1}' | sort | uniq -c
-
 # 查降级
 grep "fallback to TCP" /logs/datasystem_worker.INFO.log
 
@@ -568,7 +488,7 @@ grep "HealthCheck.*exiting" /logs/datasystem_worker.INFO.log
 # 查etcd问题
 grep "etcd is timeout" /logs/datasystem_worker.INFO.log
 
-# 查SHM泄漏
+# 查SHM相关指标
 grep "worker_shm_ref_table" /logs/datasystem_worker.INFO.log
 
 # 查resource.log
@@ -580,19 +500,18 @@ grep "SHARED_MEMORY\|ETCD_QUEUE\|OC_HIT_NUM" /logs/resource.log
 Worker日志：
   /logs/datasystem_worker.INFO.log      ← 运行日志
   /logs/access.log                      ← POSIX访问日志
-  /logs/resource.log                    ← 资源指标(22字段)
+  /logs/resource.log                    ← 资源指标
   /logs/request_out.log                 ← 第三方请求(ETCD/OBS)
 
 Client日志：
   /path/client/ds_client_{pid}.INFO.log     ← SDK运行日志
-  /path/client/ds_client_access_{pid}.log    ← SDK访问日志
+  /path/client/ds_client_access_{pid}.log   ← SDK访问日志
 ```
 
-### B.4 resource.log字段顺序（22字段）
+### B.4 resource.log关键字段
 ```
 顺序|指标|含义
 1|SHARED_MEMORY|共享内存使用率
-2|SPILL_HARD_DISK|Spill磁盘用量
 3|ACTIVE_CLIENT_COUNT|已建连客户端数
 4|OBJECT_COUNT|对象个数
 5|OBJECT_SIZE|对象总大小
@@ -604,10 +523,5 @@ Client日志：
 11|ETCD_REQUEST_SUCCESS_RATE|etcd成功率
 12|OBS_REQUEST_SUCCESS_RATE|OBS成功率
 13|MASTER_ASYNC_TASKS_THREAD_POOL|Master异步任务池
-14|STREAM_COUNT|Stream条数
-15-18|WORKER_SC_SERVICE_THREAD_POOL等|SC相关线程池
-19|STREAM_REMOTE_SEND_SUCCESS_RATE|SC远端发送成功率
-20|SHARED_DISK|共享磁盘用量
-21|SC_LOCAL_CACHE|SC本地缓存
 22|OC_HIT_NUM|缓存命中率(mem/disk/l2/remote/miss)
 ```
