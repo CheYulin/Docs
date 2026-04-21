@@ -28,7 +28,7 @@
 | 05 | [05-metrics-and-perf.md](05-metrics-and-perf.md) | 已落地的 ZMQ/KV metrics 清单（可运行时读取）+ 性能关键路径 + 采集命令 | `common/metrics/kv_metrics.{h,cpp}` / `zmq_socket_ref.cpp` |
 | 06 | [06-dependencies/](06-dependencies/README.md) | 外部/三方件依赖：URMA、OS syscall、etcd、二级存储 | — |
 | 07 | [07-pr-metrics-fault-localization.md](07-pr-metrics-fault-localization.md) | PR 串讲 (#583/#584/#586/#588) × 36 条 metric × 17 个日志标签 × 故障定界决策树，给测试/研发值班用 | `common/metrics/kv_metrics.cpp` / `zmq_socket_ref.cpp` / `urma_manager.cpp` |
-| 08 | [08-fault-triage-consolidated.md](08-fault-triage-consolidated.md) | **值班速查版**：从 access 日志看成功率/P99 → 30 秒分类 → 1–3 分钟定界；五边界（用户/DS 进程内/三方 etcd/URMA/OS）；含 ASCII 定界流程图、实战示例、全量 54 条 KV metrics | `kv_metrics` / `status.h` / `zmq` / `urma`（细节见 05/07） |
+| 08 | [08-fault-triage-consolidated.md](08-fault-triage-consolidated.md) | **值班速查 + 附录参考**：从 access 日志看成功率/P99 → 30 秒分类 → 1–3 分钟定界；五边界（用户/DS 进程内/三方 etcd/URMA/OS）；附录 A–F 速查卡 / 54 条 metrics / 结构化日志标签 / resource.log 字段 / 注入矩阵 / gflag | `kv_metrics` / `status.h` / `zmq` / `urma`（细节见 05/07） |
 | 09 | [09-observable-test-construction.md](09-observable-test-construction.md) | **可观测用例构造与验证指南**：把 08 的"看证据做定界"反向成"故障注入 → 期望证据 → 自动化判据"；给每个故障域提供 ST 骨架、`INJECT_POINT` / iptables / tc 注入手段、四维断言模板 | `tests/st/common/rpc/zmq/zmq_metrics_fault_test.cpp` / `common/inject/inject_point.h` / `scripts/testing/verify/*` |
 
 ## 工具与产物
