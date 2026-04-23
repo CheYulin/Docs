@@ -183,7 +183,7 @@ grep -E '\[URMA_' $LOG/*.INFO.log | tail -20
 
 步骤7：定位 yuanrong-datasystem 问题
 
-6.1 code ∈ {19, 23, 29, 31, 32} 或 code ∈ {1001, 1002} 且日志前缀为数据系统相关
+6.1 code ∈ {19, 20, 23, 29, 31, 32} 或 code ∈ {1001, 1002} 且日志前缀为数据系统相关
 
 （1）查看日志前缀进行问题定界：
 
@@ -192,18 +192,128 @@ grep -E '\[URMA_' $LOG/*.INFO.log | tail -20
 |---|---|---|---|
 | `K_TRY_AGAIN`(19) | `[RPC_RECV_TIMEOUT]` + fault=0 | 分布式并行实验室 | 对端处理慢；`WAITING_TASK_NUM` 堆积 |
 | `K_TRY_AGAIN`(19) | `[ZMQ_SEND_FAILURE_TOTAL]` + 对端活 | 客户业务运维 | 网络问题 |
+| `K_DATA_INCONSISTENCY`(20) | 元数据与实际数据不一致 | 分布式并行实验室 | 检查 Worker 进程 bug；查看 CoreDump |
 | `K_CLIENT_WORKER_DISCONNECT`(23) | `[TCP_CONNECT_FAILED]` + 对端不在 | 分布式并行实验室 | 对端 Worker 重启/崩溃 |
 | `K_CLIENT_WORKER_DISCONNECT`(23) | `Cannot receive heartbeat` | 分布式并行实验室/客户运维 | 检查对端进程和网络 |
 | `K_SERVER_FD_CLOSED`(29) | `[HealthCheck] Worker is exiting` | 分布式并行实验室 | Worker 主动退出 |
 | `K_SCALE_DOWN`(31) / `K_SCALING`(32) | `meta_is_moving` | 分布式并行实验室 | 扩缩容中；SDK 自重试 |
 | `K_RPC_DEADLINE_EXCEEDED`(1001) | `[RPC_SERVICE_UNAVAILABLE]` | 分布式并行实验室 | 对端拒绝；检查对端状态 |
+| `K_RPC_DEADLINE_EXCEEDED`(1001) | `[RPC_RECV_TIMEOUT]` + fault=0 | 分布式并行实验室 | 对端处理慢；`WAITING_TASK_NUM` 堆积 |
+| `K_RPC_UNAVAILABLE`(1002) | `[TCP_CONNECT_FAILED]` + 对端不在 | 分布式并行实验室 | 对端 Worker 重启/崩溃 |
+| `K_RPC_UNAVAILABLE`(1002) | `[TCP_CONNECT_FAILED]` + 对端活 | 客户业务运维/网络 | 端口不通/iptables/路由 |
+| `K_RPC_UNAVAILABLE`(1002) | `[UDS_CONNECT_FAILED]` / `[SHM_FD_TRANSFER_FAILED]` | 客户业务运维 | UDS 路径/权限/fd 上限 |
+| `K_RPC_UNAVAILABLE`(1002) | `[ZMQ_SEND_FAILURE_TOTAL]` + `zmq_last_error_number` | 客户业务运维/网络 | 按 errno 对照排查 |
 | `K_RPC_UNAVAILABLE`(1002) | `zmq_event_handshake_failure_total`↑ | 分布式并行实验室 | TLS/认证配置问题 |
+| `K_RPC_UNAVAILABLE`(1002) | `etcd is timeout/unavailable` | 客户运维 | etcd 问题 |
 
-（2）交叉验证：
+（2）code=19 详细排查
+
+（2.1）如果是 `[RPC_RECV_TIMEOUT]` + fault=0：
+
+```bash
+# 检查对端线程池是否打满
+grep 'WAITING_TASK_NUM' $LOG/resource.log
+```
+
+→ `WAITING_TASK_NUM` 堆积 → 扩线程池；查 CPU/锁
+
+（2.2）如果是 `[ZMQ_SEND_FAILURE_TOTAL]` + 对端活：
+
+```bash
+# 检查网络连接
+ping <peer_ip>
+ss -tnlp | grep <port>
+```
+
+（3）code=20 详细排查
+
+```bash
+# 检查 Worker 进程是否异常退出过
+grep -E 'Worker is exiting|Segmentation fault' $LOG/datasystem_worker.INFO.log
+
+# 检查 object count 和 size 是否匹配
+grep -E 'worker_object_count|OBJECT_SIZE' $LOG/resource.log
+
+# 检查副本间数据一致性
+grep -E 'replica|inconsistent' $LOG/datasystem_worker.INFO.log
+
+# 检查网络是否有丢包/乱序
+nstat -az
+ip -s link
+```
+
+（4）code=1001 详细排查
+
+（4.1）如果是 `[RPC_SERVICE_UNAVAILABLE]`：
+
+```bash
+# 检查对端 Worker 是否在运行
+pgrep -af datasystem_worker
+ss -tnlp | grep <worker_port>
+
+# 检查对端是否正在扩缩容
+grep -E 'meta_is_moving|SCALING' $LOG/datasystem_worker.INFO.log
+```
+
+（4.2）如果是 `[RPC_RECV_TIMEOUT]`：
+
+```bash
+# 检查对端线程池是否打满
+grep 'WAITING_TASK_NUM' $LOG/resource.log
+
+# 检查对端 CPU/内存是否正常
+top -bn1 | head -20
+```
+
+（5）code=1002 详细排查
+
+（5.1）如果是 TCP/UDS/ZMQ 问题：
+
+```bash
+# 检查网络连接
+ping <peer_ip>
+ss -tnlp | grep <port>
+
+# 检查 iptables 规则
+iptables -L -n
+
+# 检查 ZMQ errno
+grep 'zmq_last_error_number' $LOG/datasystem_worker.INFO.log
+```
+
+（5.2）如果是 etcd 问题：
+
+```bash
+etcdctl endpoint status -w table
+systemctl status etcd
+```
+
+（5.3）如果是 TLS/认证问题：
+
+```bash
+# 检查证书配置
+grep -E 'handshake|TLS|Cert' $LOG/datasystem_worker.INFO.log
+
+# 检查 zmq_event_handshake_failure_total
+grep 'zmq_event_handshake_failure_total' $LOG/datasystem_worker.INFO.log
+```
+
+（5.4）交叉验证：
+
+```bash
+# 检查对端是否存活
+ping <peer_ip>
+ssh <peer_ip> "pgrep -af datasystem_worker"
+
+# 检查对端 Worker 日志
+grep -E 'Worker is exiting|Cannot receive heartbeat' $LOG/datasystem_worker.INFO.log
+```
+
+（6）交叉验证：
 - 对端 Worker 日志同时间窗有受理日志 → 对端活
 - `worker_object_count` / access log 计数断崖 → 对端 Worker 重启
 
-（3）资源指标：`WAITING_TASK_NUM` 堆积 → 查 CPU/锁；扩 `oc_rpc_thread_num`
+（7）资源指标：`WAITING_TASK_NUM` 堆积 → 查 CPU/锁；扩 `oc_rpc_thread_num`
 
 ---
 
@@ -250,6 +360,7 @@ grep -E '\[URMA_' $LOG/*.INFO.log | tail -20
 | 13 | `K_NO_SPACE` | OS | 客户业务运维 |
 | 18 | `K_FILE_LIMIT_REACHED` | OS | 客户业务运维 |
 | 19 | `K_TRY_AGAIN` | 数据系统/OS | 分布式并行实验室/客户业务运维 |
+| 20 | `K_DATA_INCONSISTENCY` | 数据系统 | 分布式并行实验室 |
 | 23 | `K_CLIENT_WORKER_DISCONNECT` | 数据系统/OS/机器 | 分布式并行实验室/客户业务运维 |
 | 25 | `K_MASTER_TIMEOUT` | etcd 三方 | 客户运维 |
 | 29 | `K_SERVER_FD_CLOSED` | 数据系统 | 分布式并行实验室 |
