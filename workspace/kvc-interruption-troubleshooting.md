@@ -7,6 +7,33 @@
 
 ## 二、故障排查
 
+### 文档中的「fault」是什么、看哪几个指标
+
+手册里写的 **fault 不是单独一个指标名**，而是指：**在问题时间窗内，ZMQ 是否在指标上累计了“发送/接收失败”**（传输层 I/O 失败被 `METRIC_INC` 计数），用来和「纯超时、对端慢」区分。
+
+**必看（Counter，对照监控/日志里同一进程相邻两次 dump 的差值，即 delta）**
+
+| 数据字段 | 名称 | 含义 |
+|----------|------|------|
+| `zmq_send_failure_total` | ZMQ 发送失败次数 | `zmq_send` 失败时递增，日志里常带 `[ZMQ_SEND_FAILURE_TOTAL] errno=...` |
+| `zmq_receive_failure_total` | ZMQ 接收失败次数 | `zmq_recv` 失败时递增 |
+
+**判读约定（下文用简称）**
+
+- **「无 ZMQ 失败增量」**：`zmq_send_failure_total` 与 `zmq_receive_failure_total` 在故障时段 **delta 均为 0** —— 说明这段时间里**没有**新的 ZMQ 发送/接收 I/O 失败计数；若仍出现 `[RPC_RECV_TIMEOUT]`，更倾向**对端处理慢、队列堵、deadline 过短**等，而不是当前已观测到的 socket 层 send/recv 报错。
+- **「有 ZMQ 失败增量」**：任一 Counter **delta > 0** —— 优先查**网络丢包/断连、防火墙、对端进程重启、TLS** 等。
+
+**辅助（按需）**
+
+| 数据字段 | 类型 | 用途 |
+|----------|------|------|
+| `zmq_network_error_total` | Counter | 网络类错误累计，可与上两者一起看 |
+| `zmq_last_error_number` | Gauge | 最近一次 ZMQ 相关 errno，需结合日志时间对齐 |
+| `zmq_event_disconnect_total` | Counter | ZMQ 监控到的断开事件 |
+| `zmq_event_handshake_failure_total` | Counter | TLS/握手失败 |
+
+---
+
 ### 步骤1：确认成功率聚集服务器
 
 **操作**：查看司南平台和DongMonitor平台，筛选成功率异常的Pod IP分布
@@ -100,10 +127,10 @@ ss -tnlp | grep <worker_port>
 
 | 故障信息 | 代码位置 | 问题定位 | 责任组织 | 定界依据 | 解决措施 |
 |----------|----------|----------|----------|----------|----------|
-| `[RPC_RECV_TIMEOUT]` + `fault=0` | `zmq_stub_impl.cpp:574` | 对端处理慢 | **元戎数据系统** | 网络正常但对端不响应 | 检查对端CPU/锁/线程池 |
-| `[RPC_RECV_TIMEOUT]` + `fault>0` | `zmq_msg_queue.h:890` | 网络问题 | 客户运维/网络 | 网络丢包/断开 | 检查网络链路 |
+| `[RPC_RECV_TIMEOUT]` + **无 ZMQ 失败增量** | `zmq_stub_impl.cpp:574` | 对端处理慢 | **元戎数据系统** | send/recv 失败计数未涨 | 检查对端CPU/锁/线程池 |
+| `[RPC_RECV_TIMEOUT]` + **有 ZMQ 失败增量** | `zmq_msg_queue.h:890` | 网络问题 | 客户运维/网络 | send/recv 失败计数有涨 | 检查网络链路 |
 | `[ZMQ_SEND_FAILURE_TOTAL]` + 对端存活 | `zmq_socket.cpp` | 网络故障 | 客户运维/网络 | 网络故障但对端存活 | 检查防火墙/路由 |
-| `[ZMQ_RECV_TIMEOUT]` | `zmq_msg_queue.h:889` | 接收超时 | 按fault值判断 | 同上 | 同上 |
+| `[ZMQ_RECV_TIMEOUT]` | `zmq_msg_queue.h:889` | 接收超时 | 按是否**有 ZMQ 失败增量**判断 | 同上 | 同上 |
 
 ---
 
@@ -180,8 +207,8 @@ grep 'RPC_SERVICE_UNAVAILABLE' $LOG/datasystem_worker.INFO.log | tail -20
 | 故障信息 | 代码位置 | 问题定位 | 责任组织 | 定界依据 | 解决措施 |
 |----------|----------|----------|----------|----------|----------|
 | `[RPC_SERVICE_UNAVAILABLE]` | `zmq_stub_conn.cpp:224` | 对端主动拒绝 | **元戎数据系统** | 服务不可用 | 检查对端Worker状态 |
-| `[RPC_RECV_TIMEOUT]` + `fault=0` | `zmq_stub_impl.cpp:201` | 对端处理慢 | **元戎数据系统** | 网络正常但超时 | 检查对端CPU/锁/线程池 |
-| `[RPC_RECV_TIMEOUT]` + `fault>0` | `zmq_msg_queue.h:890` | 网络导致超时 | 客户运维/网络 | 网络丢包/延迟 | 检查网络链路 |
+| `[RPC_RECV_TIMEOUT]` + **无 ZMQ 失败增量** | `zmq_stub_impl.cpp:201` | 对端处理慢 | **元戎数据系统** | send/recv 失败计数未涨 | 检查对端CPU/锁/线程池 |
+| `[RPC_RECV_TIMEOUT]` + **有 ZMQ 失败增量** | `zmq_msg_queue.h:890` | 网络导致超时 | 客户运维/网络 | send/recv 失败计数有涨 | 检查网络链路 |
 | `[TCP_CONNECT_TIMEOUT]` | `zmq_socket.cpp` | TCP建连超时 | 客户运维/网络 | 网络连接建立失败 | 检查防火墙/路由 |
 
 **定界决策树**：
@@ -190,9 +217,9 @@ K_RPC_DEADLINE_EXCEEDED (1001)
      │
      ├── [RPC_SERVICE_UNAVAILABLE] → 【元戎数据系统】对端拒绝服务
      │
-     ├── fault=0 + 对端在运行 → 【元戎数据系统】对端处理慢
+     ├── **无 ZMQ 失败增量** + 对端在运行 → 【元戎数据系统】对端处理慢
      │
-     └── fault>0 或对端不在 → 【客户运维/网络】检查网络
+     └── **有 ZMQ 失败增量** 或对端不在 → 【客户运维/网络】检查网络
 ```
 
 ---
@@ -246,7 +273,7 @@ grep 'etcd is timeout\|etcd is unavailable' $LOG/datasystem_worker.INFO.log | ta
 | `[ZMQ_SEND_FAILURE_TOTAL]` + `zmq_last_error_number=N` | `zmq_socket.cpp` | - | 按errno细分 | 客户运维/网络 | 对照errno表排查 |
 | `zmq_event_handshake_failure_total`↑ | `zmq_socket.cpp` | - | TLS/认证问题 | **元戎数据系统** | 检查证书配置 |
 | `etcd is timeout/unavailable` | `etcd_cluster_manager.cpp` | - | etcd问题 | 客户运维 | 检查etcd集群 |
-| fault=0 + 对端在运行 | - | - | 对端处理慢/拒绝 | **元戎数据系统** | 检查对端资源 |
+| **无 ZMQ 失败增量** + 对端在运行 | - | - | 对端处理慢/拒绝 | **元戎数据系统** | 检查对端资源 |
 
 **定界决策树**：
 ```
@@ -254,9 +281,9 @@ K_RPC_UNAVAILABLE (1002)
      │
      ├── 对端不在 → 【元戎数据系统】对端崩溃/重启
      │
-     ├── 对端存活 + fault>0 → 【客户运维/网络】检查网络
+     ├── 对端存活 + **有 ZMQ 失败增量** → 【客户运维/网络】检查网络
      │
-     ├── 对端存活 + fault=0 → 【元戎数据系统】对端处理慢/拒绝
+     ├── 对端存活 + **无 ZMQ 失败增量** → 【元戎数据系统】对端处理慢/拒绝
      │
      └── etcd相关 → 【客户运维】检查etcd
 ```
@@ -267,8 +294,8 @@ K_RPC_UNAVAILABLE (1002)
 
 | 责任主体 | 归属 | 判断依据 |
 |----------|------|----------|
-| **元戎数据系统** | 分布式并行实验室 | fault=0+对端在运行 / Worker崩溃/主动拒绝 |
-| **客户运维/网络** | 客户运维 | fault>0 / ping不通 / iptables / tc |
+| **元戎数据系统** | 分布式并行实验室 | **无 ZMQ 失败增量**+对端在运行 / Worker崩溃/主动拒绝 |
+| **客户运维/网络** | 客户运维 | **有 ZMQ 失败增量** / ping不通 / iptables / tc |
 | **客户运维** | 客户运维 | etcd超时 / 磁盘满 / fd耗尽 / 内存 |
 | **URMA** | 分布式并行实验室/海思 | URMA相关错误码1004/1006/1008/1009/1010 |
 
@@ -290,7 +317,9 @@ K_RPC_UNAVAILABLE (1002)
 
 | 数据字段 | 名称 | 单位 | 指标说明 | 判定方法 | 解决措施 |
 |----------|------|------|----------|----------|----------|
-| `zmq_send_failure_total` | ZMQ发送失败次数 | count | ZMQ发送失败累计次数 | delta>0表示网络/连接故障 | 检查网络和防火墙 |
-| `zmq_receive_failure_total` | ZMQ接收失败次数 | count | ZMQ接收失败累计次数 | delta>0表示网络/连接故障 | 检查网络和防火墙 |
-| `zmq_last_error_number` | ZMQ最后错误码 | - | errno对照码 | N值对照errno表 | 按errno处理 |
+| `zmq_send_failure_total` | ZMQ发送失败次数 | count | `zmq_send` 失败累计；文档中「有/无 ZMQ 失败增量」主看本项与下行 | 故障时段 **delta>0** → 有发送层失败 | 查网络、对端、errno |
+| `zmq_receive_failure_total` | ZMQ接收失败次数 | count | `zmq_recv` 失败累计 | 故障时段 **delta>0** → 有接收层失败 | 同上 |
+| `zmq_network_error_total` | ZMQ网络错误次数 | count | 网络类错误累计 | delta>0 时辅助确认 | 查链路质量 |
+| `zmq_last_error_number` | ZMQ最后错误码 | - | 最近一次相关 errno（Gauge） | 与日志时间对齐后对照 errno | 按 errno 细分 |
 | `zmq_event_handshake_failure_total` | TLS握手失败次数 | count | TLS/认证握手失败 | delta>0 | 检查证书配置 |
+| `zmq_event_disconnect_total` | ZMQ断开事件次数 | count | 监控到的断开 | delta>0 | 查网络/对端重启 |
