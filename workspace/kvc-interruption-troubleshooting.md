@@ -57,6 +57,11 @@
 
 ### code=5 — K_RUNTIME_ERROR
 
+**查看命令**：
+```bash
+grep -E 'Get mmap entry failed|etcd is|urma' $LOG/datasystem_worker.INFO.log
+```
+
 ```
 code=5 K_RUNTIME_ERROR
   │ 错误消息: "Runtime error"
@@ -64,20 +69,34 @@ code=5 K_RUNTIME_ERROR
   ├─ 日志含"Get mmap entry failed"
   │   ├─ 错误消息: "Get mmap entry failed"
   │   ├─ errno: ENOMEM(mlock限制)
-  │   └─→ 【OS】内存锁定限制 ── 处置: ulimit -l unlimited
+  │   └─→ 【OS】内存锁定限制
+  │       处置: ulimit -l unlimited
+  │       验证: cat /proc/$(pgrep datasystem_worker)/limits | grep 'Max locked memory'
   │
   ├─ 日志含"etcd is timeout" / "etcd is unavailable"
   │   ├─ 错误消息: "etcd is timeout/unavailable"
-  │   └─→ 【etcd】三方依赖 ── 处置: etcdctl endpoint status
+  │   └─→ 【etcd】三方依赖
+  │       处置: etcdctl endpoint status -w table
+  │       验证: systemctl status etcd
   │
   └─ 日志含"urma ... payload ..."
       ├─ 错误消息: "urma ... payload ..."
-      └─→ 【URMA】UB传输失败 ── 查: grep -E '\[URMA_' $LOG/*.INFO.log
+      └─→ 【URMA】UB传输失败
+          查: grep -E '\[URMA_' $LOG/datasystem_worker.INFO.log
 ```
 
 ---
 
 ### code=19 — K_TRY_AGAIN
+
+**查看命令**：
+```bash
+# ZMQ failure delta
+grep 'zmq_send_failure_total' $LOG/datasystem_worker.INFO.log | tail -3
+grep 'zmq_receive_failure_total' $LOG/datasystem_worker.INFO.log | tail -3
+# 对端状态
+ssh <peer_ip> "pgrep -af datasystem_worker"
+```
 
 ```
 code=19 K_TRY_AGAIN
@@ -85,19 +104,31 @@ code=19 K_TRY_AGAIN
   │ 代码: zmq_msg_queue.h:884（recv返回EAGAIN背压）
   │
   ├─ ZMQ failure delta=0
-  │   ├─ Metrics: zmq_send_failure_total delta=0
-  │   ├─ Metrics: zmq_receive_failure_total delta=0
-  │   └─→ 【数据系统】对端处理慢 ── 查: WAITING_TASK_NUM/CPU/锁
+  │   └─→ 【数据系统】对端处理慢
+  │       查: grep 'WAITING_TASK_NUM' $LOG/resource.log
+  │       查: top -bn1 | head -20
   │
   └─ ZMQ failure delta>0
-      ├─ Metrics: zmq_send_failure_total delta>0 或 zmq_receive_failure_total delta>0
-      ├─ 日志: [ZMQ_SEND_FAILURE_TOTAL] errno=...
-      └─→ 【OS/网络】网络丢包/断连 ── 按errno表细分
+      └─→ 【OS/网络】网络丢包/断连
+          查: grep 'zmq_last_error_number' $LOG/datasystem_worker.INFO.log
+          按errno表细分
 ```
 
 ---
 
 ### code=23 — K_CLIENT_WORKER_DISCONNECT
+
+**查看命令**：
+```bash
+# 对端进程是否存在
+ssh <peer_ip> "pgrep -af datasystem_worker"
+# Worker退出日志
+grep 'Worker is exiting' $LOG/datasystem_worker.INFO.log
+# 心跳超时
+grep 'Cannot receive heartbeat' $LOG/datasystem_worker.INFO.log
+# 网络连通性
+ping <peer_ip>
+```
 
 ```
 code=23 K_CLIENT_WORKER_DISCONNECT
@@ -105,22 +136,33 @@ code=23 K_CLIENT_WORKER_DISCONNECT
   │ 代码: listen_worker.cpp:114（心跳超时）
   │
   ├─ 对端进程不存在
-  │   ├─ 证据: ssh <peer> "pgrep -af datasystem_worker" 无结果
-  │   ├─ 日志: [HealthCheck] Worker is exiting now
-  │   └─→ 【数据系统】Worker崩溃 ── 查: grep "Worker is exiting"日志
+  │   └─→ 【数据系统】Worker崩溃
+  │       证据: grep 'Worker is exiting' $LOG/datasystem_worker.INFO.log
   │
   ├─ 对端存活 + ping不通
-  │   └─→ 【OS/网络】防火墙/路由 ── 处置: iptables -L / ping
+  │   └─→ 【OS/网络】防火墙/路由
+  │       处置: iptables -L -n
   │
   └─ 对端存活 + ping通
-      ├─ 日志: "Cannot receive heartbeat from worker."
       └─→ 【OS/网络】对端负载高/网络抖
-          查: WAITING_TASK_NUM / top / ping RTT
+          证据: grep 'Cannot receive heartbeat' $LOG/datasystem_worker.INFO.log
+          查: grep 'WAITING_TASK_NUM' $LOG/resource.log
+          查: ping -c 100 <peer_ip>
 ```
 
 ---
 
 ### code=1001 — K_RPC_DEADLINE_EXCEEDED
+
+**查看命令**：
+```bash
+# ZMQ failure delta
+grep 'zmq_send_failure_total' $LOG/datasystem_worker.INFO.log | tail -3
+# 对端状态
+ssh <peer_ip> "pgrep -af datasystem_worker"
+# 主动拒绝
+grep 'RPC_SERVICE_UNAVAILABLE' $LOG/datasystem_worker.INFO.log
+```
 
 ```
 code=1001 K_RPC_DEADLINE_EXCEEDED
@@ -128,22 +170,38 @@ code=1001 K_RPC_DEADLINE_EXCEEDED
   │ 代码: zmq_service.cpp:724（remainingTime<=0，服务端deadline到期）
   │
   ├─ 日志含"[RPC_SERVICE_UNAVAILABLE]"
-  │   ├─ 错误消息: "The service is currently unavailable!"
-  │   ├─ 代码: zmq_stub_conn.cpp:224
-  │   └─→ 【数据系统】对端拒绝服务 ── 查: 对端Worker状态
+  │   └─→ 【数据系统】对端拒绝服务
+  │       证据: grep 'RPC_SERVICE_UNAVAILABLE' $LOG/datasystem_worker.INFO.log
   │
   ├─ ZMQ failure delta=0 + 对端存活
-  │   ├─ Metrics: zmq_send_failure_total delta=0
-  │   └─→ 【数据系统】对端处理慢 ── 查: WAITING_TASK_NUM/CPU/锁
+  │   └─→ 【数据系统】对端处理慢
+  │       查: grep 'WAITING_TASK_NUM' $LOG/resource.log
   │
   └─ ZMQ failure delta>0 或对端不在
-      ├─ Metrics: zmq_send_failure_total delta>0
-      └─→ 【OS/网络】网络问题 ── 按errno表细分
+      └─→ 【OS/网络】网络问题
+          查: grep 'zmq_last_error_number' $LOG/datasystem_worker.INFO.log
 ```
 
 ---
 
 ### code=1002 — K_RPC_UNAVAILABLE
+
+**查看命令**：
+```bash
+# Worker退出
+grep 'Worker is exiting' $LOG/datasystem_worker.INFO.log
+# TLS握手
+grep 'zmq_event_handshake_failure_total' $LOG/datasystem_worker.INFO.log | tail -3
+# etcd
+grep 'etcd is' $LOG/datasystem_worker.INFO.log
+# TCP连接
+grep -E '\[TCP_CONNECT_FAILED\]|\[TCP_CONNECT_RESET\]' $LOG/datasystem_worker.INFO.log
+# ZMQ failure delta
+grep 'zmq_send_failure_total' $LOG/datasystem_worker.INFO.log | tail -3
+grep 'zmq_last_error_number' $LOG/datasystem_worker.INFO.log | tail -3
+# 对端状态
+ssh <peer_ip> "pgrep -af datasystem_worker"
+```
 
 ```
 code=1002 K_RPC_UNAVAILABLE
@@ -151,67 +209,80 @@ code=1002 K_RPC_UNAVAILABLE
   │ 代码: zmq_socket_ref.cpp:175,211（ZMQ send/recv真失败）
   │
   ├─ 对端进程不存在
-  │   ├─ 日志: [HealthCheck] Worker is exiting now
   │   └─→ 【数据系统】Worker崩溃
+  │       证据: grep 'Worker is exiting' $LOG/datasystem_worker.INFO.log
   │
   ├─ 日志含"[RPC_SERVICE_UNAVAILABLE]"
   │   └─→ 【数据系统】对端主动拒绝
   │
   ├─ 日志含"zmq_event_handshake_failure_total"↑
-  │   ├─ 代码: zmq_monitor.cpp:149,155,162（TLS握手失败）
   │   └─→ 【数据系统】TLS/证书问题
+  │       证据: grep 'zmq_event_handshake_failure_total' $LOG/datasystem_worker.INFO.log
   │
   ├─ 日志含"etcd is ..."
-  │   └─→ 【etcd】─ 处置: etcdctl endpoint status
+  │   └─→ 【etcd】
+  │       处置: etcdctl endpoint status -w table
   │
   ├─ 日志含"[TCP_CONNECT_FAILED]" + 对端存活
-  │   ├─ 错误消息: "TCP connect failed"
-  │   └─→ 【OS/网络】防火墙/端口 ── 处置: ss -tnlp / iptables
+  │   └─→ 【OS/网络】防火墙/端口
+  │       处置: ss -tnlp | grep <port>
+  │       处置: iptables -L -n
   │
   ├─ 日志含"[TCP_CONNECT_RESET]" / "[TCP_NETWORK_UNREACHABLE]"
-  │   ├─ errno: ECONNRESET(104) / EPIPE
-  │   └─→ 【OS/网络】网络闪断 ── 处置: dmesg / netstat -s
+  │   └─→ 【OS/网络】网络闪断
+  │       处置: dmesg | tail -50
   │
   ├─ 日志含"[UDS_CONNECT_FAILED]"
   │   └─→ 【OS/网络】UDS路径/权限问题
   │
   ├─ 日志含"[SHM_FD_TRANSFER_FAILED]"
-  │   └─→ 【OS】fd耗尽/权限 ── 处置: ulimit -n
+  │   └─→ 【OS】fd耗尽/权限
+  │       处置: ulimit -n
   │
   ├─ ZMQ failure delta>0
-  │   ├─ Metrics: zmq_send_failure_total delta>0
-  │   ├─ 日志: [ZMQ_SEND_FAILURE_TOTAL] errno=...
   │   └─→ 【OS/网络】按errno表细分
+  │       证据: grep 'zmq_last_error_number' $LOG/datasystem_worker.INFO.log
   │
   └─ ZMQ failure delta=0 + 对端存活
-      └─→ 【数据系统】对端处理慢/拒绝 ── 查: WAITING_TASK_NUM
+      └─→ 【数据系统】对端处理慢/拒绝
+          查: grep 'WAITING_TASK_NUM' $LOG/resource.log
 ```
 
 ---
 
 ### code=1006 — K_URMA_NEED_CONNECT
 
+**查看命令**：
+```bash
+grep -E '\[URMA_NEED_CONNECT\]|\[URMA_POLL_ERROR\]' $LOG/datasystem_worker.INFO.log
+```
+
 ```
 code=1006 K_URMA_NEED_CONNECT
   │ 错误消息: "Urma needs to reconnet"
   │
   ├─ remoteInstanceId变化
-  │   ├─ 日志: [URMA_NEED_CONNECT] remoteInstanceId=X → remoteInstanceId=Y
   │   └─→ 【数据系统】对端Worker重启（正常）─ SDK自重连
+  │       证据: grep 'URMA_NEED_CONNECT' $LOG/datasystem_worker.INFO.log
   │
   ├─ instanceId不变 + 连接断开
-  │   ├─ 日志: [URMA_NEED_CONNECT] Connection stale for remoteAddress: ...
   │   └─→ 【URMA】连接断开需重建
+  │       证据: grep 'URMA_NEED_CONNECT' $LOG/datasystem_worker.INFO.log
   │
   └─ instanceId不变 + 持续出现 + [URMA_POLL_ERROR]并存
-      ├─ 日志: [URMA_NEED_CONNECT] Connection unstable for remoteAddress: ...
-      ├─ 日志: [URMA_POLL_ERROR] PollJfcWait failed: ...
-      └─→ 【URMA】UB链路不稳 ── 查: 交换机端口状态
+      └─→ 【URMA】UB链路不稳
+          证据: grep -E 'URMA_NEED_CONNECT|URMA_POLL_ERROR' $LOG/datasystem_worker.INFO.log
+          查: ifconfig ub0
 ```
 
 ---
 
 ### code=1008 — K_URMA_TRY_AGAIN
+
+**查看命令**：
+```bash
+grep -E '\[URMA_RECREATE_JFS\]|\[URMA_RECREATE_JFS_FAILED\]|\[URMA_RECREATE_JFS_SKIP\]' $LOG/datasystem_worker.INFO.log
+```
 
 ```
 code=1008 K_URMA_TRY_AGAIN
@@ -221,9 +292,8 @@ code=1008 K_URMA_TRY_AGAIN
   │   └─→ 自动重建中（继续观察是否有FAILED）
   │
   ├─ [URMA_RECREATE_JFS_FAILED]连续
-  │   ├─ 日志: [URMA_RECREATE_JFS_FAILED] requestId=..., op=..., ret=%d
-  │   ├─ ret=URMA错误码
-  │   └─→ 【URMA】JFS重建失败 ── 查: UMDK/驱动日志
+  │   └─→ 【URMA】JFS重建失败
+  │       证据: grep 'URMA_RECREATE_JFS_FAILED' $LOG/datasystem_worker.INFO.log
   │
   ├─ [URMA_RECREATE_JFS_SKIP]
   │   └─→ 连接过期跳过，正常 ── 无需处置
