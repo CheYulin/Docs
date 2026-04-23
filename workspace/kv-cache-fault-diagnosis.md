@@ -317,6 +317,139 @@ grep -E 'Worker is exiting|Cannot receive heartbeat' $LOG/datasystem_worker.INFO
 
 ---
 
+### 错误码 19, 1001, 1002：数据系统 vs 客户侧问题定界
+
+**核心判据**：看 ZMQ fault 值 + 对端是否存活
+
+| 判据 | 结论 |
+|------|------|
+| ZMQ fault = 0（无 ZMQ 错误） | 网络正常，问题在对端处理 |
+| ZMQ fault > 0（有 ZMQ 错误） | 网络/连接问题 |
+
+#### 19 (K_TRY_AGAIN) 定界
+
+**关键判断**：查看 `fault` 值
+
+| 场景 | 日志前缀 | 责任组织 | 定界依据 |
+|------|---------|---------|---------|
+| `[RPC_RECV_TIMEOUT]` + **fault=0** | 对端处理慢 | **分布式并行实验室** | 网络正常但对端不响应 |
+| `[RPC_RECV_TIMEOUT]` + **fault>0** | 网络问题 | 客户业务运维/网络 | 网络丢包/断开 |
+| `[ZMQ_SEND_FAILURE_TOTAL]` + 对端**活** | 网络问题 | 客户业务运维/网络 | 网络故障但对端存活 |
+
+**定界命令**：
+
+```bash
+# 查看是否有 ZMQ 故障
+grep 'zmq_send_failure_total\|zmq_receive_failure_total' $LOG/datasystem_worker.INFO.log
+
+# 检查对端是否存活
+ping <peer_ip>
+ssh <peer_ip> "pgrep -af datasystem_worker"
+
+# 如果对端活 + fault=0 → 数据系统问题（对端处理慢）
+# 如果对端活 + fault>0 → 网络问题
+```
+
+#### 1001 (K_RPC_DEADLINE_EXCEEDED) 定界
+
+**关键判断**：查看日志前缀
+
+| 场景 | 日志前缀 | 责任组织 | 定界依据 |
+|------|---------|---------|---------|
+| `[RPC_SERVICE_UNAVAILABLE]` | 对端拒绝 | **分布式并行实验室** | 对端主动返回失败 |
+| `[RPC_RECV_TIMEOUT]` + **fault=0** | 对端处理慢 | **分布式并行实验室** | 网络正常但对端超时 |
+| `[RPC_RECV_TIMEOUT]` + **fault>0** | 网络问题 | 客户业务运维/网络 | 网络导致超时 |
+| `[TCP_CONNECT_TIMEOUT]` | TCP 建连超时 | 客户业务运维/网络 | 网络连接建立失败 |
+
+**定界命令**：
+
+```bash
+# 查看 ZMQ fault 值
+grep 'zmq_last_error_number\|zmq_send_failure_total' $LOG/datasystem_worker.INFO.log
+
+# 检查对端是否在运行
+pgrep -af datasystem_worker
+ss -tnlp | grep <worker_port>
+
+# 检查是否是主动拒绝
+grep 'RPC_SERVICE_UNAVAILABLE' $LOG/datasystem_worker.INFO.log
+
+# 如果 fault=0 + 对端在运行 → 数据系统问题（对端拒绝/处理慢）
+# 如果 fault>0 或对端不在 → 客户网络/硬件问题
+```
+
+#### 1002 (K_RPC_UNAVAILABLE) 定界
+
+**关键判断**：查看具体前缀 + 对端状态
+
+| 场景 | 日志前缀 | 对端状态 | 责任组织 |
+|------|---------|---------|---------|
+| `[TCP_CONNECT_FAILED]` | **不在** | Worker 重启/崩溃 | **分布式并行实验室** |
+| `[TCP_CONNECT_FAILED]` | **活** | 端口不通/防火墙 | 客户业务运维/网络 |
+| `[TCP_CONNECT_RESET]` | — | 网络闪断 | 客户业务运维/网络 |
+| `[UDS_CONNECT_FAILED]` | — | UDS 路径/权限问题 | 客户业务运维 |
+| `[SHM_FD_TRANSFER_FAILED]` | — | fd 耗尽/权限问题 | 客户业务运维 |
+| `[ZMQ_SEND_FAILURE_TOTAL]` + `zmq_last_error_number` | — | 按 errno 细分 | 客户业务运维/网络 |
+| `zmq_event_handshake_failure_total`↑ | — | TLS/认证问题 | **分布式并行实验室** |
+| `etcd is timeout/unavailable` | — | etcd 问题 | 客户运维 |
+| fault=0 + 对端在运行 | — | 对端处理慢 | **分布式并行实验室** |
+
+**定界命令**：
+
+```bash
+# 1. 检查对端是否存活
+ping <peer_ip>
+ssh <peer_ip> "pgrep -af datasystem_worker"
+
+# 2. 如果对端存活，检查 fault 值
+grep 'zmq_last_error_number' $LOG/datasystem_worker.INFO.log
+
+# 3. 检查是否是 TLS 问题
+grep 'zmq_event_handshake_failure_total' $LOG/datasystem_worker.INFO.log
+
+# 4. 对端不在 + fault>0 → 数据系统问题（对端崩溃/重启）
+# 5. 对端活 + fault>0 → 客户网络问题
+# 6. fault=0 + 对端活 → 数据系统问题（对端处理慢/拒绝）
+```
+
+#### 定界决策树
+
+```
+code=19/1001/1002
+       │
+       ▼
+检查对端是否存活
+       │
+   ┌───┴───┐
+   ▼       ▼
+  存活     不存活
+   │       │
+   ▼       ▼
+检查 fault 值     → 分布式并行实验室（对端崩溃）
+   │               检查对端为何退出
+┌───┴───┐
+▼       ▼
+fault=0   fault>0
+   │       │
+   ▼       ▼
+数据系统   客户网络/OS问题
+问题      检查网络配置
+(对端处理慢)  (iptables/tc/网卡)
+```
+
+#### 快速判据总结
+
+| 错误码 | 对端状态 | fault 值 | 责任组织 |
+|--------|---------|---------|---------|
+| 19/1001/1002 | 存活 | = 0 | **分布式并行实验室**（对端处理慢/拒绝） |
+| 19/1001/1002 | 存活 | > 0 | 客户业务运维/网络 |
+| 19/1001/1002 | 不存活 | 任意 | **分布式并行实验室**（对端崩溃需查原因） |
+| 1002 | 任意 | — | 客户业务运维（TCP/UDS/ZMQ） |
+| 1002 | 任意 | — | 客户运维（etcd） |
+| 1002 | 任意 | — | **分布式并行实验室**（TLS/认证配置） |
+
+---
+
 **多方故障定界到具体组织的排查步骤**
 
 当故障涉及多个组织时，按以下顺序交叉验证：
