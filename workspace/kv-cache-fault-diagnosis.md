@@ -317,6 +317,116 @@ grep -E 'Worker is exiting|Cannot receive heartbeat' $LOG/datasystem_worker.INFO
 
 ---
 
+## code=23 (K_CLIENT_WORKER_DISCONNECT) 定界
+
+### 核心判据：看 TCP 连接状态 + 对端是否存活
+
+| 日志前缀 | 对端状态 | 责任组织 | 定界依据 |
+|---------|---------|---------|---------|
+| `[TCP_CONNECT_FAILED]` + 对端**不在** | Worker 已退出 | **分布式并行实验室** | 对端 Worker 崩溃/重启 |
+| `[TCP_CONNECT_FAILED]` + 对端**存活** | 端口不通/防火墙 | 客户业务运维/网络 | 网络问题 |
+| `Cannot receive heartbeat` | 心跳超时 | 分布式并行实验室/客户运维 | 检查对端进程和网络 |
+
+### 定界步骤
+
+**步骤1：检查对端是否存活**
+
+```bash
+# 检查对端 IP 是否可达
+ping <peer_ip>
+
+# 检查对端 Worker 进程
+ssh <peer_ip> "pgrep -af datasystem_worker"
+
+# 检查 Worker 端口
+ss -tnlp | grep <worker_port>
+```
+
+**步骤2：根据对端状态定界**
+
+#### 如果对端不在 → 分布式并行实验室
+
+| 场景 | 可能原因 | 排查命令 |
+|------|---------|---------|
+| Worker 崩溃 | 进程异常退出 | `grep -E 'Worker is exiting|Segmentation fault' $LOG/datasystem_worker.INFO.log` |
+| Worker 被 kill | OOM/编排杀进程 | `dmesg | grep -i kill` |
+| 机器宕机 | 硬件故障 | 检查机器是否可达 |
+
+#### 如果对端存活 → 客户业务运维/网络
+
+| 场景 | 可能原因 | 排查命令 |
+|------|---------|---------|
+| 端口不通 | iptables 拦截 | `iptables -L -n` |
+| 网络闪断 | 网络抖动 | `dmesg | grep -i network` |
+| 连接被拒绝 | 端口未监听 | `ss -tnlp | grep <port>` |
+
+### 特殊情况：Cannot receive heartbeat
+
+**可能原因**：
+
+| 原因 | 责任组织 | 排查方法 |
+|------|---------|---------|
+| 对端 Worker 负载过高，处理不过来 | 分布式并行实验室 | 检查对端 `WAITING_TASK_NUM` |
+| 对端机器负载高 | 客户运维 | 检查对端 `top/free` |
+| 网络抖动导致心跳丢包 | 客户运维/网络 | 检查网络稳定性 |
+| 对端 Worker 正在扩缩容 | 分布式并行实验室 | `grep -E 'meta_is_moving\|SCALING' $LOG/*.INFO.log` |
+
+**排查命令**：
+
+```bash
+# 检查心跳相关日志
+grep 'Cannot receive heartbeat' $LOG/datasystem_worker.INFO.log
+
+# 检查对端 Worker 状态
+ssh <peer_ip> "pgrep -af datasystem_worker"
+
+# 检查资源指标
+grep 'WAITING_TASK_NUM' $LOG/resource.log
+
+# 检查网络稳定性
+ping -c 100 <peer_ip>
+```
+
+### 定界决策树
+
+```
+code=23 K_CLIENT_WORKER_DISCONNECT
+          │
+          ▼
+    检查对端是否存活
+          │
+      ┌───┴───┐
+      ▼       ▼
+    存活      不存活
+      │       │
+      ▼       ▼
+  客户网络问题    分布式并行实验室
+  iptables/路由   检查对端为何退出
+      │          (崩溃/OOM/被kill)
+      ▼
+  检查心跳日志
+  Cannot receive heartbeat?
+      │
+  ┌───┴───┐
+  ▼       ▼
+  是       否
+  │       │
+  ▼       ▼
+检查对端负载  检查网络配置
+/网络稳定性  (iptables/tc)
+```
+
+### 快速判据
+
+| 条件 | 责任组织 |
+|------|---------|
+| 对端不在（进程消失） | **分布式并行实验室** |
+| 对端存活 + 网络不通 | 客户业务运维/网络 |
+| 对端存活 + 心跳超时 | 分布式并行实验室（对端负载高）或 客户运维（网络抖） |
+| 对端存活 + 端口被拒绝 | 客户业务运维（防火墙） |
+
+---
+
 ### 错误码 19, 1001, 1002：数据系统 vs 客户侧问题定界
 
 **核心判据**：看 ZMQ fault 值 + 对端是否存活
