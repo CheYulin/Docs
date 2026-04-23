@@ -44,13 +44,73 @@
 | `K_NOT_FOUND`(3) | `Can't find object` | 客户业务 | 业务自查 key |
 | `K_NOT_READY`(8) | `ConnectOptions was not configured` | 客户业务 | 检查 Init |
 
-步骤3：排查 URMA 问题
+步骤3：排查 code=5 (K_RUNTIME_ERROR)
 
-3.1 code ∈ {1004, 1006, 1008, 1009, 1010} → URMA
+3.1 code=5 需要根据错误信息细分
+
+（1）查看具体错误信息
+
+```bash
+grep -E 'K_RUNTIME_ERROR|Get mmap entry failed|etcd is|urma' $LOG/datasystem_worker.INFO.log | tail -50
+```
+
+（2）根据错误信息定界：
+
+**表7**
+| 错误信息 | 责任边界 | 责任组织 | 常见问题排查指导 |
+|---|---|---|---|
+| `Get mmap entry failed` | OS | 客户业务运维 | `ulimit -l unlimited`；检查内存锁定限制 |
+| `etcd is timeout/unavailable` | etcd 三方 | 客户运维 | `etcdctl endpoint status`；检查 etcd 集群和网络 |
+| `urma ... payload ...` | URMA | 分布式并行实验室/海思 | 查 URMA 日志 |
+
+3.2 如果错误信息为 `Get mmap entry failed` → OS（内存锁定限制）
+
+（1）检查 mlock 限制
+
+```bash
+ulimit -l unlimited
+cat /proc/<pid>/limits | grep 'Max locked memory'
+```
+
+（2）如仍失败，检查内存是否不足
+
+```bash
+free -h
+dmesg | grep -i 'out of memory'
+```
+
+3.3 如果错误信息为 `etcd is timeout/unavailable` → etcd 三方
+
+（1）检查 etcd 集群状态
+
+```bash
+etcdctl endpoint status -w table
+systemctl status etcd
+```
+
+（2）检查到 etcd 的网络
+
+```bash
+ping <etcd_ip>
+```
+
+3.4 如果错误信息为 `urma ... payload ...` → URMA
+
+（1）查看 URMA 相关日志
+
+```bash
+grep -E '\[URMA_' $LOG/*.INFO.log | tail -20
+```
+
+（2）如果 URMA 日志无异常，则进入步骤5
+
+步骤4：排查 URMA 问题
+
+4.1 code ∈ {1004, 1006, 1008, 1009, 1010} → URMA
 
 （1）查看 URMA 日志进行问题定界：
 
-**表2**
+**表7**
 | 错误码 | 证据 | 责任组织 | 常见问题排查指导 |
 |---|---|---|---|
 | `K_URMA_ERROR`(1004) | `[URMA_POLL_ERROR]` | 海思 | 驱动/硬件问题；`dmesg` |
@@ -63,18 +123,18 @@
 
 （2）`fallback to TCP/IP payload` → URMA 降级至 TCP（间歇少量为 UB 抖，持续高频为 UB 端口 down）
 
-（3）如果 URMA 日志无异常，则进入步骤4
+（3）如果 URMA 日志无异常，则进入步骤5
 
-步骤4：排查 OS 问题
+步骤5：排查 OS 问题
 
-4.1 code ∈ {5, 6, 7, 13, 18} → OS
+5.1 code ∈ {6, 7, 13, 18} → OS
 
 （1）查看错误日志进行问题定界：
 
-**表3**
+**表7**
 | 错误码 | 含义 | 责任组织 | 常见问题排查指导 |
 |---|---|---|---|
-| `K_RUNTIME_ERROR`(5) + `Get mmap entry failed` | mmap 限制 | 客户业务运维 | `ulimit -l unlimited` |
+| 
 | `K_OUT_OF_MEMORY`(6) | 内存不足 | 客户业务运维/硬件 | `dmesg | grep -i oom`；`free -h`；检查物理内存 |
 | `K_IO_ERROR`(7) | IO 错误 | 客户业务运维/硬件 | `dmesg`；检查磁盘/Smart 参数 |
 | `K_NO_SPACE`(13) | 磁盘满 | 客户业务运维 | `df -h`；清理磁盘 |
@@ -84,7 +144,7 @@
 
 （1）查看日志前缀进行问题定界：
 
-**表4**
+**表7**
 | 日志前缀 | 责任组织 | 常见问题排查指导 |
 |---|---|---|
 | `[TCP_CONNECT_FAILED]` + 对端 Worker **活** | 客户业务运维/网络 | 端口不通/iptables/路由 |
@@ -94,7 +154,7 @@
 
 （2）`zmq_last_error_number` → errno 对照：
 
-**表5**
+**表7**
 | N | 枚举 | 典型含义 |
 |---|---|---|
 | 11 | `EAGAIN` / `EWOULDBLOCK` | 背压（非错） |
@@ -106,22 +166,22 @@
 
 （3）如果 OS 日志无明确问题，则进入步骤5
 
-步骤5：排查 etcd 三方问题
+步骤6：排查 etcd 三方问题
 
 5.1 code=25 或 `etcd is timeout/unavailable`
 
 （1）查看 etcd 日志进行问题定界：
 
-**表6**
+**表7**
 | 证据 | 责任组织 | 常见问题排查指导 |
 |---|---|---|
 | `etcd is timeout` / `etcd is unavailable` | 客户运维 | etcd 集群或网络；`etcdctl endpoint status` |
 | `ETCD_QUEUE` 堆积 | 客户运维 | 检查 etcd 集群健康状态 |
 | `ETCD_REQUEST_SUCCESS_RATE` 下降 | 客户运维 | 检查 etcd 网络和磁盘 |
 
-（2）如果 etcd 日志无异常，则进入步骤6
+（2）如果 etcd 日志无异常，则进入步骤7
 
-步骤6：定位 yuanrong-datasystem 问题
+步骤7：定位 yuanrong-datasystem 问题
 
 6.1 code ∈ {19, 23, 29, 31, 32} 或 code ∈ {1001, 1002} 且日志前缀为数据系统相关
 
@@ -252,7 +312,7 @@ grep 'Compare with' $LOG/datasystem_worker.INFO.log | tail -3
 | `urma_*` delta=0 + `tcp_*` 字节正常 + `fallback to TCP/IP payload` | 海思 | UB 降级至 TCP；间歇少量为 UB 抖，持续高频为 UB 端口 down |
 | `[URMA_NEED_CONNECT]` / `[URMA_RECREATE_JFS]` 间歇 | 海思/分布式并行实验室 | 查 UMDK / 驱动；`ibstat` |
 
-（2）如果 URMA 指标正常，则进入步骤4
+（2）如果 URMA 指标正常，则进入步骤5
 
 步骤4：排查 OS 网络问题
 
