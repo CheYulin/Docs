@@ -23,7 +23,7 @@ Options:
   --skip-perf         Do not run kv_executor_perf_analysis.py (E2E cluster may be required)
   -h, --help          This help
 
-After "--", remaining args are passed to scripts/verify/validate_brpc_kv_executor.sh
+After "--", remaining args are passed to scripts/archive/validate_brpc_kv_executor.sh.archived
 
 Each run creates:
   <out-root>/<YYYYMMDD_HHMMSS>_<githash>/
@@ -91,7 +91,7 @@ mkdir -p "${RUN_DIR}"
 echo "[INFO] Writing gate logs to ${RUN_DIR}"
 
 set +e
-bash "${SCRIPT_DIR}/../../testing/verify/validate_brpc_kv_executor.sh" \
+bash "${SCRIPT_DIR}/../../archive/validate_brpc_kv_executor.sh.archived" \
   --build-dir "${BUILD_DIR}" \
   "${VALIDATE_EXTRA[@]}" \
   >"${RUN_DIR}/gate_validate.log" 2>&1

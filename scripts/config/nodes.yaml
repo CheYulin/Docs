@@ -1,0 +1,25 @@
+# 节点配置文件：所有远端节点的统一配置来源
+# hermes agent 无法访问 gitcode，只能访问 GitHub
+# ds = yuanrong-datasystem (gitcode, hermes 不可达)
+# agent-workbench = yuanrong-datasystem-agent-workbench (GitHub, hermes 可达)
+
+default: xqyun-32c32g
+
+nodes:
+  xqyun-32c32g:
+    ssh_host: xqyun-32c32g
+    ssh_user: root
+    workspace_root: ~/workspace/git-repos
+    hermes_workspace_root: ~/agent/hermes-workspace
+    thirdparty_cache: ~/.cache/yuanrong-datasystem-third-party
+    pkg_manager: dnf
+    description: "主开发节点（Cursor 日间用）"
+
+  centos9-new:
+    ssh_host: <NEW_HOST_IP_OR_FQDN>
+    ssh_user: root
+    workspace_root: ~/workspace/git-repos
+    hermes_workspace_root: ~/agent/hermes-workspace
+    thirdparty_cache: ~/.cache/yuanrong-datasystem-third-party
+    pkg_manager: dnf
+    description: "新 CentOS9 节点（hermes 夜间用）"

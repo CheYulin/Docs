@@ -11,6 +11,14 @@
 #     (c) counts of every structured log tag introduced by PR #583 / #588
 #     (d) presence of ZmqMetricsFaultTest [FAULT INJECT] / [ISOLATION] markers
 #
+# Supports TWO log formats:
+#   - JSON-in-log  : worker INFO log with embedded JSON like
+#                    '{"event":"metrics_summary","version":"v0","cycle":1,...}'
+#                    (current C++ worker output)
+#   - text-parsed  : legacy plaintext format like
+#                    'Metrics Summary, version=v0, cycle=1' / 'Total:' / 'Compare with Nms before:'
+#                    (old-style human-readable metrics)
+#
 # Usage:
 #   ./summarize_observability_log.sh <log> [<log> ...]
 #
@@ -55,6 +63,99 @@ hist_last() {
     | tail -n 1 | sed -E "s/^${name},//"
 }
 
+# Extract the last JSON metrics_summary block from logs and return a Python-
+# readable summary of every metric's last total/delta.  Falls back to empty
+# string when no JSON metrics are found.
+json_metrics_summary() {
+  local tmp
+  tmp=$(mktemp)
+  # Grab every line that starts a JSON object containing metrics_summary.
+  # Lines may be preceded by a log-header prefix like "2026-04-23T... | I | metrics.cpp:191 ... |  |  "
+  # We strip everything up to the first '{'.
+  { grep -h --binary-files=without-match '"event":"metrics_summary"' "${LOGS[@]}" 2>/dev/null \
+    | sed -E 's/^[^{]*//' | grep '{' || true; } > "$tmp"
+
+  if [[ ! -s "$tmp" ]]; then
+    rm -f "$tmp"
+    return
+  fi
+
+  python3 - "$tmp" << 'PYEOF'
+import json, sys, os
+
+path = sys.argv[1]
+entries = []
+with open(path) as f:
+    for raw in f:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            # Try to extract the JSON object by balancing braces
+            obj_str = raw
+            try:
+                obj = json.loads(obj_str)
+            except json.JSONDecodeError:
+                continue
+        if "metrics" in obj:
+            entries.append(obj)
+
+if not entries:
+    sys.exit(0)
+
+last = entries[-1]
+cycle = last.get("cycle", "?")
+interval = last.get("interval_ms", 0)
+metrics = last.get("metrics", [])
+
+print(f"JSON format detected | cycle={cycle} | interval={interval}ms | {len(metrics)} metrics")
+print()
+
+counter_total = 0
+counter_delta = 0
+hist_total = 0
+hist_delta = 0
+
+for m in metrics:
+    name = m.get("name", "?")
+    total = m.get("total", 0)
+    delta = m.get("delta", 0)
+
+    if isinstance(total, (int, float)) and isinstance(delta, (int, float)):
+        # Gauge / counter
+        sign = "+" if delta >= 0 else ""
+        # Format large integers with thousands-sep to avoid shell column-wrap
+        t_str = f"{int(total):,}" if isinstance(total, int) else str(total)
+        d_str = f"{sign}{int(delta):,}" if isinstance(delta, int) else f"{sign}{delta}"
+        print(f"  G  {name:<50s}  total={t_str:>25}  delta={d_str}")
+        counter_total += 1
+        counter_delta += 1
+    elif isinstance(total, dict):
+        cnt  = total.get("count", 0)
+        avg  = total.get("avg_us", 0)
+        mx   = total.get("max_us", 0)
+        if isinstance(delta, dict):
+            dcnt = delta.get("count", 0)
+            davg = delta.get("avg_us", 0)
+            dmx  = delta.get("max_us", 0)
+            print(f"  H  {name:<50s}  cnt={cnt:6d}  avg={avg:10.0f}us  max={mx:10.0f}us  d_cnt={dcnt:+d}  d_avg={davg:+.0f}us")
+        else:
+            print(f"  H  {name:<50s}  cnt={cnt:6d}  avg={avg:10.0f}us  max={mx:10.0f}us  delta={delta}")
+        hist_total += 1
+        hist_delta += 1
+    else:
+        print(f"  ?  {name:<50s}  total={str(total):>20}  delta={str(delta):>20}")
+
+print()
+print(f"  Counters/gauges : {counter_total} total / {counter_delta} with delta")
+print(f"  Histograms      : {hist_total} total / {hist_delta} with delta")
+PYEOF
+
+  rm -f "$tmp"
+}
+
 banner() {
   printf '\n═══ %s ═══\n' "$1"
 }
@@ -63,6 +164,16 @@ banner "0. Summary blocks"
 printf '  Metrics Summary header lines  : %s\n' "$(count '^Metrics Summary, version=v0, cycle=[0-9]+')"
 printf '  Total: segments               : %s\n' "$(count '^Total:$')"
 printf '  Compare-with-previous segments: %s\n' "$(count '^Compare with [0-9]+ms before:$')"
+
+# Try JSON format first; fall back to text-parsed format.
+JSON_SUMMARY=$(json_metrics_summary 2>/dev/null || true)
+if [[ -n "$JSON_SUMMARY" ]]; then
+  banner "0b. JSON metrics (last cycle from event=metrics_summary)"
+  echo "$JSON_SUMMARY"
+else
+  banner "0b. JSON metrics"
+  echo "  <no JSON metrics_summary events found>"
+fi
 
 banner "1. KV metrics — last delta (+N) in Compare segment"
 KV_COUNTERS=(

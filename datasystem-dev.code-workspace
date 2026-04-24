@@ -1,16 +1,12 @@
 {
   "folders": [
     {
-      "name": "vibe-coding-files",
+      "name": "yuanrong-datasystem-agent-workbench",
       "path": "."
     },
     {
       "name": "yuanrong-datasystem",
       "path": "../yuanrong-datasystem"
-    },
-    {
-      "name": "vibe-observability",
-      "path": "./workspace/observability"
     }
   ],
   "settings": {

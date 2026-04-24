@@ -2,10 +2,11 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# shellcheck source=../lib/datasystem_root.sh
+# Source new shared libs
 . "${SCRIPT_DIR}/../lib/datasystem_root.sh"
-# shellcheck source=../lib/vibe_coding_root.sh
-. "${SCRIPT_DIR}/../lib/vibe_coding_root.sh"
+. "${SCRIPT_DIR}/../lib/common.sh"
+. "${SCRIPT_DIR}/../lib/load_nodes.sh"
+. "${SCRIPT_DIR}/../lib/timing.sh"
 
 LOCAL_DS="${ROOT_DIR}"
 LOCAL_VIBE="${VIBE_CODING_ROOT}"
@@ -29,44 +30,6 @@ SKIP_WHEEL_INSTALL=0
 BUILD_INCREMENT="on"
 VALIDATE_URMA_TCP_LOGS=0
 URMA_LOG_PATH=""
-TIMING_REPORT=""
-
-log_info() {
-  echo "[$(date '+%F %T')] $*"
-}
-
-run_timed() {
-  local step="$1"
-  shift
-  local started_at ended_at elapsed
-  started_at="$(date +%s)"
-  log_info "[start] ${step}"
-  if "$@"; then
-    ended_at="$(date +%s)"
-    elapsed="$((ended_at - started_at))"
-    log_info "[done] ${step} (${elapsed}s)"
-    TIMING_REPORT+="${step}|${elapsed}|OK"$'\n'
-  else
-    ended_at="$(date +%s)"
-    elapsed="$((ended_at - started_at))"
-    log_info "[fail] ${step} (${elapsed}s)"
-    TIMING_REPORT+="${step}|${elapsed}|FAIL"$'\n'
-    return 1
-  fi
-}
-
-print_timing_report() {
-  if [[ -z "${TIMING_REPORT}" ]]; then
-    return
-  fi
-  echo
-  echo "== local timing summary =="
-  printf '%-44s %-10s %-6s\n' "STEP" "ELAPSED" "STATUS"
-  while IFS='|' read -r step elapsed status; do
-    [[ -z "${step}" ]] && continue
-    printf '%-44s %-10ss %-6s\n' "${step}" "${elapsed}" "${status}"
-  done <<< "${TIMING_REPORT}"
-}
 
 usage() {
   cat <<'EOF'
@@ -236,7 +199,7 @@ if [[ -z "${REMOTE_DS}" ]]; then
   REMOTE_DS="${REMOTE_BASE%/}/yuanrong-datasystem"
 fi
 if [[ -z "${REMOTE_VIBE}" ]]; then
-  REMOTE_VIBE="${REMOTE_BASE%/}/vibe-coding-files"
+  REMOTE_VIBE="${REMOTE_BASE%/}/yuanrong-datasystem-agent-workbench"
 fi
 
 REMOTE_HOME="$(ssh "${REMOTE}" 'printf %s "$HOME"')"
@@ -441,7 +404,7 @@ else
 fi
 
 if [[ "${SKIP_VALIDATE}" != "1" ]]; then
-  run_timed "test.validate_kv_executor" bash "${VIBE}/scripts/verify/validate_kv_executor.sh" --skip-build "${REMOTE_BUILD_DIR}"
+  run_timed "test.validate_kv_executor" bash "${VIBE}/scripts/testing/verify/validate_kv_executor.sh" --skip-build "${REMOTE_BUILD_DIR}"
 else
   echo "[validate] Skipped (--skip-validate)"
 fi

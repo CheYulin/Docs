@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Sync local vibe-coding-files/ and yuanrong-datasystem/ to remote host xqyun-32c32g.
+# Sync local yuanrong-datasystem-agent-workbench/ and yuanrong-datasystem/ to remote host.
 #
 # 特点：
 #   - 保留 .git/ 一起同步（方便在远端 `git status` / `git log`）。
@@ -20,14 +20,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# 解析 vibe-coding-files / yuanrong-datasystem 根目录。
-# 脚本位于 <vibe>/scripts/development/sync/，因此向上 3 级是 vibe-coding-files 根。
-# yuanrong-datasystem 默认位于 vibe-coding-files 同级。
-VIBE_CODING_ROOT="${VIBE_CODING_ROOT:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
+# 解析 yuanrong-datasystem-agent-workbench / yuanrong-datasystem 根目录。
+# 脚本位于 <workbench>/scripts/development/sync/，向上 3 级是 workbench 根。
+# yuanrong-datasystem 默认位于 workbench 同级。
+WORKBENCH_ROOT="${WORKBENCH_ROOT:-$(cd "${SCRIPT_DIR}/../../.." && pwd)}"
 if [[ -n "${DATASYSTEM_ROOT:-}" ]]; then
   ROOT_DIR="$(cd "${DATASYSTEM_ROOT}" && pwd)"
-elif [[ -f "${VIBE_CODING_ROOT}/../yuanrong-datasystem/CMakeLists.txt" ]]; then
-  ROOT_DIR="$(cd "${VIBE_CODING_ROOT}/../yuanrong-datasystem" && pwd)"
+elif [[ -f "${WORKBENCH_ROOT}/../yuanrong-datasystem/CMakeLists.txt" ]]; then
+  ROOT_DIR="$(cd "${WORKBENCH_ROOT}/../yuanrong-datasystem" && pwd)"
 else
   echo "Cannot locate yuanrong-datasystem checkout. " \
        "Set DATASYSTEM_ROOT=/path/to/yuanrong-datasystem and retry." >&2
@@ -95,7 +95,7 @@ fi
 
 # 远端目录名与本地顶层目录名保持一致
 LOCAL_DS="${ROOT_DIR}"
-LOCAL_VIBE="${VIBE_CODING_ROOT}"
+LOCAL_VIBE="${WORKBENCH_ROOT}"
 REMOTE_DS="${REMOTE_BASE%/}/$(basename "${LOCAL_DS}")"
 REMOTE_VIBE="${REMOTE_BASE%/}/$(basename "${LOCAL_VIBE}")"
 

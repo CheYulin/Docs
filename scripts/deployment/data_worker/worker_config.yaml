@@ -1,0 +1,31 @@
+# Data Worker Configuration Template
+# Copy to worker_config.yaml and adjust for your environment.
+#
+# Reference: yuanrong-datasystem/cli/deploy/conf/worker_config.json
+
+# Worker identity
+worker:
+  name: "data-worker-1"
+  port: 18888
+  numa_node: 0
+
+# etcd connection
+etcd:
+  endpoints:
+    - "http://127.0.0.1:2379"
+  timeout_ms: 5000
+
+# Storage paths
+storage:
+  data_dir: "/tmp/datasystem_worker_data"
+  log_dir: "/tmp/datasystem_worker_logs"
+
+# Resource limits
+resource:
+  max_memory_gb: 16
+  max_connections: 1024
+
+# Logging
+logging:
+  level: "INFO"
+  file: "/tmp/datasystem_worker.log"
