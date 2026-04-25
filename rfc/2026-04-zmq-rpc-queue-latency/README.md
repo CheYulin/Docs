@@ -1,8 +1,9 @@
 # RFC: ZMQ RPC 队列时延可观测（自证清白 + 定界）
 
-- **Status**: **Draft**
+- **Status**: **In-Progress**（PR #706 已修复 ENABLE_PERF=false 时的 tick 记录问题）
 - **Started**: 2026-04
 - **Depended on**: PR #584（Add lightweight metrics framework）
+- **Related PR**: PR #706（修复 ENABLE_PERF=false 时 metrics 无法打印的问题）
 
 ---
 

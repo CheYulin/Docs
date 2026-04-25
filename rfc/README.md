@@ -31,6 +31,7 @@
 | [2026-04-zmq-rpc-metrics/](2026-04-zmq-rpc-metrics/README.md) | **Done** | `common/metrics/kv_metrics.{h,cpp}`：`ZMQ_SEND_IO_LATENCY`、`ZMQ_RECEIVE_IO_LATENCY`、`ZMQ_LAST_ERROR_NUMBER`、`ZMQ_NETWORK_ERROR_TOTAL`、`ZMQ_SEND/RECEIVE_FAILURE_TOTAL`、`ZMQ_EVENT_DISCONNECT_TOTAL`、`ZMQ_EVENT_HANDSHAKE_FAILURE_TOTAL`、`ZMQ_GATEWAY_RECREATE_TOTAL` 等 |
 | [2026-04-shm-leak-observability/](2026-04-shm-leak-observability/README.md) | **In-Progress**（MR [#635](https://gitcode.com/openeuler/yuanrong-datasystem/merge_requests/635) 评审中） | 新增 18 条 metric（10 worker + 6 master + 2 client）合并为单 commit `3bbcc55a` / 单 PR：覆盖 Allocator alloc/free 对账、`memoryRefTable_` size/bytes、ShmUnit 生命周期、master TTL 链路（fire/success/failed/retry/pending）、client async release 滞后；针对 [2026-04-19 worker shm OOM](../bugfix/2026-04-19-worker-shm-oom-问题定位.md) |
 | [2026-04-zmq-rpc-queue-latency/](2026-04-zmq-rpc-queue-latency/README.md) | **Draft** | `common/metrics/kv_metrics.{h,cpp}`：新增 7 个 Histogram metric（`ZMQ_CLIENT_QUEUING_LATENCY`、`ZMQ_CLIENT_STUB_SEND_LATENCY`、`ZMQ_SERVER_QUEUE_WAIT_LATENCY`、`ZMQ_SERVER_EXEC_LATENCY`、`ZMQ_SERVER_REPLY_LATENCY`、`ZMQ_RPC_E2E_LATENCY`、`ZMQ_RPC_NETWORK_LATENCY`）；`zmq_constants.h`：新增 8 个 Tick 常量 |
+| [2026-04-zmq-rpc-metrics-0.8.1/](2026-04-zmq-rpc-metrics-0.8.1/README.md) | **Draft** | 修复 `ENABLE_PERF=false` 时 ZMQ metrics 无法分段时间的问题（cherry-pick PR #706 到 0.8.1 分支） |
 
 ---
 

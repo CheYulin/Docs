@@ -1,0 +1,78 @@
+@startuml ZMQ_RPC_Metrics_Simple
+title ZMQ Metrics (MetaPb + client_id map fallback)
+
+participant Client as "Thread-1\n(Python/C++ Caller)"
+participant StubOrUnary as "Thread-1\n(Stub AsyncWrite or Unary SendAll/SendConnMsg)"
+participant FrontQ as "ZmqFrontend\nSendMsg + ZmqFrontWorker"
+participant Server as "ZmqService I/O\n(FrontendToBackend / reply path)"
+participant Worker as "WorkerEntry\n(Business Execute)"
+participant Map as "Process map\nclient_id -> ticks"
+
+legend right
+|= Color |= Meaning |
+|<#C8E6C9> Green|MetaPb path (wall-clock ts on ticks)|
+|<#FFF9C4> Yellow|MetaPb main path; may be missing on some branches|
+|<#FFCDD2> Red|Use concurrent map by **client_id** (param name in code: traceId)|
+endlegend
+
+== Request (two shapes) ==
+
+Client -> StubOrUnary: start RPC
+
+note over StubOrUnary
+Async stub path
+end note
+StubOrUnary -[#2E7D32]> StubOrUnary: RecordTickWithTs(CLIENT_ENQUEUE)
+StubOrUnary -[#2E7D32]> Map: save(**client_id**, enqueue)
+StubOrUnary -> FrontQ: ZmqFrontend::SendMsg(que)
+FrontQ -[#2E7D32]> FrontQ: RecordTickWithTs(CLIENT_TO_STUB)
+FrontQ -[#2E7D32]> Map: update(client_id, to_stub)
+FrontQ -[#2E7D32]> FrontQ: RouteToZmq*/Unix: RecordTickWithTs(CLIENT_SEND)\n(before meta serialize & send)
+FrontQ -[#2E7D32]> Map: update(client_id, send)
+FrontQ -[#2E7D32]> Server: on wire (MetaPb + payload)
+
+note over StubOrUnary
+Unary path (common in smoke)
+end note
+StubOrUnary -[#2E7D32]> StubOrUnary: StartTheClock; RecordTickWithTs(CLIENT_ENQUEUE)
+StubOrUnary -[#2E7D32]> Map: save(client_id, enqueue)
+StubOrUnary -[#2E7D32]> StubOrUnary: SendConnMsg: TO_STUB + SEND 同线程连续打点
+StubOrUnary -[#2E7D32]> Map: update to_stub, send
+StubOrUnary -> FrontQ: mQue_->SendMsg
+FrontQ -[#2E7D32]> Server: 同上（若经 Gateway 再发仍走 Route* 的 CLIENT_SEND）
+
+== Server ==
+
+Server -[#2E7D32]> Server: RecordTick(SERVER_RECV)\n(FrontendToBackend 解析后)
+Server -[#2E7D32]> Worker: dispatch
+Worker -[#2E7D32]> Worker: RecordTick(SERVER_DEQUEUE)
+Worker -[#2E7D32]> Worker: business
+Worker -[#2E7D32]> Worker: RecordTick(SERVER_EXEC_END)
+Worker -[#2E7D32]> Worker: append tick **SERVER_EXEC_NS** (ts=**handler duration ns**, 非墙钟)
+Worker -[#2E7D32]> Map: (无, 仅 meta)
+Server -[#43A047]> Server: ServiceToClient: **SERVER_SEND**.ts=墙钟 now;\nreply 指标=now - **SERVER_EXEC_END**
+Server -[#43A047]--> FrontQ: response MetaPb (ticks 含 SERVER_SEND)
+
+note right of Worker
+**SERVER_EXEC_NS** 与前后 tick 的 **ts 差** 无意义，\n不得用于 RecordTick lap；\n客户端分解 network 时读 duration 或 DEQUEUE/EXEC_END 墙钟差
+end note
+
+== Response ==
+
+FrontQ -[#2E7D32]> StubOrUnary: receive queue -> AsyncRead / ReadAll
+StubOrUnary -[#2E7D32]> StubOrUnary: RecordTick(CLIENT_RECV)
+StubOrUnary -[#2E7D32]> StubOrUnary: **Log [ZmqTickOrder]** 打全链；再算 7 指标
+StubOrUnary -[#F9A825]> StubOrUnary: 若 meta 缺 CLIENT_*, 用 Map(**client_id**) 回退
+
+note over StubOrUnary, Map
+回包后 grep 日志: **[ZmqTickOrder]**\n见 README 验收步骤
+end note
+
+note over StubOrUnary
+7 个指标:
+client_queuing, client_stub_send,
+server_queue_wait, server_exec, server_reply,
+rpc_e2e, rpc_network
+end note
+
+@enduml

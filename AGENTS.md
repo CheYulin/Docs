@@ -48,3 +48,120 @@
 7. 根目录 [`README.md`](README.md)（角色定位、脚本/Skill/Excel/PPT 约定）
 
 执行本仓库脚本时，若未与 `yuanrong-datasystem` 同级放置，请设置 `DATASYSTEM_ROOT`。
+
+### 远程执行与 rsync 同步（重要）
+
+**当任务需要远程构建、测试或验证时，必须使用 rsync 同步工作流**：
+
+1. **远程主机**：`xqyun-32c32g`（默认）
+2. **同步方式**：使用 `scripts/build/remote_build_run_datasystem.sh` 进行 rsync 同步
+3. **工作流**：
+   ```
+   本地修改 → rsync 同步到远程 → 远程构建/测试 → 结果在远程
+   ```
+4. **关键约束**：
+   - 不要在远程 clone/pull 仓库（远程是纯源码目录，无 .git）
+   - 所有代码修改在本地完成，通过 rsync 同步
+   - 使用 `--skip-sync` 仅在需要重复执行远程步骤时跳过同步
+
+5. **示例命令**：
+   ```bash
+   # 完整流程：rsync 同步 + 构建 + 测试
+   bash scripts/build/remote_build_run_datasystem.sh \
+     --remote xqyun-32c32g \
+     --local-ds ~/workspace/git-repos/yuanrong-datasystem \
+     --local-vibe ~/workspace/git-repos/yuanrong-datasystem-agent-workbench
+
+   # 仅执行远程构建步骤（跳过 rsync）
+   bash scripts/build/remote_build_run_datasystem.sh --skip-sync
+   ```
+
+6. **冒烟测试**：
+   ```bash
+   ssh xqyun-32c32g 'cd ~/workspace/git-repos/yuanrong-datasystem-agent-workbench && python3 scripts/testing/verify/smoke/run_smoke.py'
+   ```
+
+详见：[`scripts/build/remote_build_run_datasystem.sh`](scripts/build/remote_build_run_datasystem.sh) 和 [`docs/agent/scripts-map.md`](docs/agent/scripts-map.md)。
+
+---
+
+## GitCode PR 操作指南
+
+本仓库关联的源码仓库 **yuanrong-datasystem** 托管在 GitCode (gitcode.com/openeuler/yuanrong-datasystem)。以下指南用于自动化 PR 审查、评论读取、评论回复等操作。
+
+### 认证
+
+所有 GitCode API 调用使用 **Bearer Token** 认证：
+
+```bash
+curl -H "Authorization: Bearer $GITCODE_TOKEN" "https://api.gitcode.com/api/v5/..."
+```
+
+环境变量：`GITCODE_TOKEN` — 在 GitCode 设置 → 访问令牌 中创建，需具备 PR 读写权限。
+
+### 关键 API 端点
+
+Base URL: `https://api.gitcode.com/api/v5`
+
+| 操作 | 方法 | 端点 |
+|------|------|------|
+| 获取 PR 详情 | GET | `/repos/:owner/:repo/pulls/:number` |
+| 获取 PR diff | GET | `/repos/:owner/:repo/pulls/:number/files` |
+| 获取评论列表 | GET | `/repos/:owner/:repo/pulls/:number/comments` |
+| 发表 PR 评论 | POST | `/repos/:owner/:repo/pulls/:number/comments` |
+| 回复评论 | POST | `/repos/:owner/:repo/pulls/:number/comments` (带 `in_reply_to_id`) |
+
+### 常用操作示例
+
+```bash
+# 获取 PR 详情（标题、状态、作者、base/head 分支）
+curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+  "https://api.gitcode.com/api/v5/repos/openeuler/yuanrong-datasystem/pulls/706"
+
+# 获取 PR 变更文件列表
+curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+  "https://api.gitcode.com/api/v5/repos/openeuler/yuanrong-datasystem/pulls/706/files"
+
+# 获取所有评论
+curl -s -H "Authorization: Bearer $GITCODE_TOKEN" \
+  "https://api.gitcode.com/api/v5/repos/openeuler/yuanrong-datasystem/pulls/706/comments"
+
+# 发表普通评论（Markdown 支持）
+curl -s -X POST -H "Authorization: Bearer $GITCODE_TOKEN" \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"body":"LGTM overall. One suggestion: consider adding unit tests for the new metrics."}' \
+  "https://api.gitcode.com/api/v5/repos/openeuler/yuanrong-datasystem/pulls/706/comments"
+
+# 回复已有评论（串入讨论线程）
+curl -s -X POST -H "Authorization: Bearer $GITCODE_TOKEN" \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{"body":"Fixed in latest commit, PTAL.","in_reply_to_id":12345678}' \
+  "https://api.gitcode.com/api/v5/repos/openeuler/yuanrong-datasystem/pulls/706/comments"
+
+# 行内代码评论（指定文件和行号）
+curl -s -X POST -H "Authorization: Bearer $GITCODE_TOKEN" \
+  -H "Content-Type: application/json; charset=utf-8" \
+  -d '{
+    "body": "Consider using const here for better compiler optimization.",
+    "path": "src/datasystem/common/rpc/zmq/zmq_stub_impl.h",
+    "new_position": 42
+  }' \
+  "https://api.gitcode.com/api/v5/repos/openeuler/yuanrong-datasystem/pulls/706/comments"
+```
+
+### PR 审查工作流
+
+1. **读取 PR 详情**：`GET /pulls/:number` → 获取标题、正文、状态、作者、base/head refs
+2. **读取变更文件**：`GET /pulls/:number/files` → 获取变更文件列表和 diff
+3. **读取现有评论**：`GET /pulls/:number/comments` → 获取所有审查评论
+4. **分析 Review 意见**：按评论 ID 和 `in_reply_to_id` 梳理讨论线程
+5. **自动回复评论**：对每个待回复的评论用 `in_reply_to_id` 参数 POST 回复
+6. **发表新评论**：没有 `in_reply_to_id` 时作为独立评论发表
+
+### 注意事项
+
+- 评论内容支持 Markdown 格式
+- 批量发表评论时注意频率限制，每次 POST 之间建议添加短暂间隔
+- `in_reply_to_id` 用于将回复串入指定评论线程
+- 行内评论通过 `path` + `new_position` 指定目标位置
+- 评论 ID 从获取评论列表的返回中获取

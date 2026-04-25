@@ -155,4 +155,5 @@ Fixes #<ISSUE_ID>
 - [x] 5 个阶段延迟 metric 正交（时间不重叠）
 - [x] NETWORK = E2E - SERVER_EXEC 可计算
 - [x] 向后兼容：旧 Server 无 SERVER_EXEC_NS 时 NETWORK = E2E
-- [x] ENABLE_PERF 关闭时所有 tick 为空，计算返回 0
+- [x] ENABLE_PERF 开启时：所有 tick 正常记录，metrics 正常工作
+- [x] ENABLE_PERF=false 时：新增 `RecordTick()`/`GetTotalElapsedTime()` 始终记录 tick，metrics 仍能正常分段时间（PR #706 修复点）
