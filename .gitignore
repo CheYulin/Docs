@@ -1,3 +1,4 @@
+logs
 # Local verification outputs (see results/README.md)
 /results/*
 !/results/README.md

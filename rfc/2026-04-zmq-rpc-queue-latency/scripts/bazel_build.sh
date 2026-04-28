@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Bazel build zmq_rpc_queue_latency_test and zmq_rpc_queue_latency_repl on remote
+# Usage: ./bazel_build.sh
 set -euo pipefail
 
 REMOTE="root@xqyun-32c32g"

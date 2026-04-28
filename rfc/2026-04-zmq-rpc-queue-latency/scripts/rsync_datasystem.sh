@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Rsync local yuanrong-datasystem to remote /root/workspace/git-repos/
+# Usage: ./rsync_datasystem.sh
 set -euo pipefail
 
 LOCAL_DS="/home/t14s/workspace/git-repos/yuanrong-datasystem"
 REMOTE="root@xqyun-32c32g"
 REMOTE_DS="/root/workspace/git-repos/yuanrong-datasystem"
-RSYNCIGNORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../scripts/build" && pwd)"
+RSYNCIGNORE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../scripts/build" && pwd)"
 RSYNCIGNORE_FILE="${RSYNCIGNORE_DIR}/remote_build_run_datasystem.rsyncignore"
 
 if [[ ! -d "${LOCAL_DS}/src" ]]; then

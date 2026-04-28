@@ -9,7 +9,7 @@ set -euo pipefail
 REMOTE="root@xqyun-32c32g"
 REMOTE_DS="/root/workspace/git-repos/yuanrong-datasystem"
 DS_OPENSOURCE_DIR_REMOTE="/root/.cache/yuanrong-datasystem-third-party"
-LOCAL_RESULTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/results" && pwd)"
+LOCAL_RESULTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../results" && pwd)"
 
 mkdir -p "${LOCAL_RESULTS_DIR}"
 
