@@ -12,6 +12,7 @@
 | **`scripts/testing/`** | 测试阶段脚本（verify） | 合入前跑 KV executor / brpc 参考用例 |
 | **`scripts/analysis/`** | 分析阶段脚本（perf） | 对比 executor 开销、锁竞争、栈/系统调用证据 |
 | **`scripts/documentation/`** | 文档阶段脚本（excel/observable） | 生成工作簿与预览页面 |
+| **`scripts/pr/`** | GitCode MR 辅助（CI 轮询等） | 监听 `ci_processing`→`ci_failed` 并自动评论 `/retest`：`scripts/pr/gitcode_ci_watch_retest.sh` |
 
 ## 2. 按任务选脚本
 

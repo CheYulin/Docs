@@ -20,6 +20,11 @@
 
   python3 gen_kv_perf_report.py --ascii-tree worker.INFO.log   # 两层 ASCII 树（关键 + 细化）
 
+  python3 gen_kv_perf_report.py -o output.log logs/input.log  # 写入文件（管道/自定义前缀 metrics 行亦支持）
+
+  python3 gen_kv_perf_report.py --dual-out logs/metrics   # metrics_total.log / metrics_delta.log / metrics.json（pretty）
+  python3 gen_kv_perf_report.py --dual-out                # output_total.log / output_delta.log / output.json
+
 bench-stats 文件示例（冒号或等号分隔，# 开头为注释）:
   Total: 40976
   Success: 40976
@@ -37,7 +42,16 @@ import re
 import sys
 from dataclasses import dataclass, field
 from json import JSONDecoder
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Optional, Tuple
+
+HistBucket = Literal["total", "delta"]
+
+# 多行 metrics_summary 时，delta 报告按 delta.count 选「负载最大」的快照（优先 Get 主路径）
+_DELTA_SCORE_PREFERRED_KEYS: Tuple[str, ...] = (
+    "worker_process_get_latency",
+    "zmq_rpc_e2e_latency",
+    "client_rpc_get_latency",
+)
 
 # ---------------------------------------------------------------------------
 # 报告章节： (标题, [(metric_name, 一行说明)])
@@ -262,8 +276,10 @@ ASCII_PERF_DETAIL_SECTIONS: List[Tuple[str, List[str]]] = [
     ),
 ]
 
-# metrics_summary 在行内的起始片段（glog 前缀后接 JSON）
-EVENT_SNIPPET = '"event":"metrics_summary"'
+# metrics_summary 在行内 JSON 起始（兼容 glog、管道分隔一行一条等前缀）
+METRICS_SUMMARY_JSON_START_RE = re.compile(
+    r'\{\s*"event"\s*:\s*"metrics_summary"'
+)
 
 # kv_metrics 中 Observe 为纳秒、JSON 仍写 avg_us/max_us 的直方图
 ZMQ_HISTOGRAM_NS = frozenset(
@@ -307,17 +323,10 @@ def iter_metrics_summary_objects(path: str) -> Iterable[Tuple[str, dict]]:
         hint_prefix = path
 
     for lineno, line in enumerate(lines, 1):
-        if EVENT_SNIPPET not in line:
-            continue
-        # 找到第一个 { 且该行包含 metrics_summary
-        brace = line.find("{")
-        while brace >= 0:
-            if EVENT_SNIPPET in line[brace : brace + 200]:
-                got = _extract_json_object(line, brace)
-                if got and got[0].get("event") == "metrics_summary":
-                    yield (f"{hint_prefix}:{lineno}", got[0])
-                    break
-            brace = line.find("{", brace + 1)
+        for m in METRICS_SUMMARY_JSON_START_RE.finditer(line):
+            got = _extract_json_object(line, m.start())
+            if got and got[0].get("event") == "metrics_summary":
+                yield (f"{hint_prefix}:{lineno}", got[0])
 
     if path != "-":
         lines.close()
@@ -338,18 +347,95 @@ def snapshot_from_obj(source_hint: str, obj: dict) -> MetricsSnapshot:
     return snap
 
 
-def format_histogram_total(item: dict) -> str:
-    t = item.get("total")
+def _snap_line_for_tie(snap: MetricsSnapshot) -> int:
+    _, ln = parse_source_hint(snap.source_line_hint)
+    return int(ln) if ln is not None else 0
+
+
+def _delta_snapshot_score(snap: MetricsSnapshot) -> int:
+    """用于多行输入时选「delta 负载」最大的一行：优先主路径直方图 delta.count，否则取全体直方图 delta.count 最大。"""
+    bn = snap.by_name
+    for k in _DELTA_SCORE_PREFERRED_KEYS:
+        it = bn.get(k)
+        if not it or not isinstance(it, dict):
+            continue
+        d = it.get("delta")
+        if isinstance(d, dict) and isinstance(d.get("count"), int):
+            c = int(d["count"])
+            if c > 0:
+                return c
+    best = 0
+    for it in bn.values():
+        if not isinstance(it, dict):
+            continue
+        d = it.get("delta")
+        if isinstance(d, dict) and isinstance(d.get("count"), int):
+            best = max(best, int(d["count"]))
+    return best
+
+
+def collect_summary_pairs(paths: List[str], last_only: bool) -> List[Tuple[str, dict]]:
+    """与 collect_snapshots_for_paths 选帧规则一致，返回 (source_hint, metrics_summary 对象原文)。"""
+    out: List[Tuple[str, dict]] = []
+    for path in paths:
+        last_pair: Optional[Tuple[str, dict]] = None
+        for hint, obj in iter_metrics_summary_objects(path):
+            if last_only:
+                last_pair = (hint, obj)
+            else:
+                out.append((hint, obj))
+        if last_only and last_pair is not None:
+            out.append(last_pair)
+    return out
+
+
+def summary_pairs_max_delta_per_path(paths: List[str]) -> List[Tuple[str, dict]]:
+    """与 snapshots_max_delta_per_path 一致：每文件选一帧（delta 负载最大）。"""
+    picked: List[Tuple[str, dict]] = []
+    for path in paths:
+        pairs = list(iter_metrics_summary_objects(path))
+        if not pairs:
+            continue
+        best = max(
+            pairs,
+            key=lambda ho: (
+                _delta_snapshot_score(snapshot_from_obj(ho[0], ho[1])),
+                _snap_line_for_tie(snapshot_from_obj(ho[0], ho[1])),
+            ),
+        )
+        picked.append(best)
+    return picked
+
+
+def collect_snapshots_for_paths(paths: List[str], last_only: bool) -> List[MetricsSnapshot]:
+    """与历史 main 一致：每文件 last_only 时只保留最后一帧，否则保留全部（按文件顺序拼接）。"""
+    return [snapshot_from_obj(h, o) for h, o in collect_summary_pairs(paths, last_only)]
+
+
+def snapshots_max_delta_per_path(paths: List[str]) -> List[MetricsSnapshot]:
+    """每文件独立：在全部 metrics_summary 行中选 delta 负载最大的一帧（同分取行号较大者）。"""
+    return [snapshot_from_obj(h, o) for h, o in summary_pairs_max_delta_per_path(paths)]
+
+
+def format_histogram_total(item: dict, *, bucket: HistBucket = "total") -> str:
+    t = item.get(bucket)
     if isinstance(t, dict):
         return json.dumps(t, ensure_ascii=False, separators=(",", ":"))
+    if bucket == "delta":
+        return "{}"
+    t0 = item.get("total")
+    if isinstance(t0, dict):
+        return json.dumps(t0, ensure_ascii=False, separators=(",", ":"))
     return json.dumps(item, ensure_ascii=False, separators=(",", ":"))
 
 
-def _hist_parts(by_name: Dict[str, Any], key: str) -> Optional[Tuple[int, int, int]]:
+def _hist_parts(
+    by_name: Dict[str, Any], key: str, *, bucket: HistBucket = "total"
+) -> Optional[Tuple[int, int, int]]:
     it = by_name.get(key)
     if not it:
         return None
-    t = it.get("total")
+    t = it.get(bucket)
     if not isinstance(t, dict) or "count" not in t:
         return None
     c = t.get("count")
@@ -360,8 +446,14 @@ def _hist_parts(by_name: Dict[str, Any], key: str) -> Optional[Tuple[int, int, i
     return int(c), int(a), int(m)
 
 
-def _fmt_hist_line(key: str, by_name: Dict[str, Any], *, ns: bool = False) -> Optional[str]:
-    p = _hist_parts(by_name, key)
+def _fmt_hist_line(
+    key: str,
+    by_name: Dict[str, Any],
+    *,
+    ns: bool = False,
+    bucket: HistBucket = "total",
+) -> Optional[str]:
+    p = _hist_parts(by_name, key, bucket=bucket)
     if not p:
         return None
     c, a, m = p
@@ -369,13 +461,17 @@ def _fmt_hist_line(key: str, by_name: Dict[str, Any], *, ns: bool = False) -> Op
     return f"{key}  n={c}  avg={a}{unit}  max={m}{unit}"
 
 
-def _fmt_scalar_line(key: str, by_name: Dict[str, Any]) -> Optional[str]:
+def _fmt_scalar_line(
+    key: str, by_name: Dict[str, Any], *, bucket: HistBucket = "total"
+) -> Optional[str]:
     it = by_name.get(key)
     if not it:
         return None
     tot = it.get("total")
+    d = it.get("delta", 0)
     if isinstance(tot, (int, float)):
-        d = it.get("delta", 0)
+        if bucket == "delta":
+            return f"{key}  delta={d}  total_now={tot}"
         return f"{key}  total={tot}  delta={d}"
     return None
 
@@ -467,7 +563,7 @@ def extract_perf_map_near_metrics(path: str, metrics_lineno: int) -> Dict[str, d
             break
         m = PERF_LINE_RE.match(raw)
         if not m:
-            if "|" in raw and "INFO" in raw and "metrics_summary" not in raw:
+            if "|" in raw and ("INFO" in raw or " I |" in raw) and "metrics_summary" not in raw:
                 break
             break
         try:
@@ -493,7 +589,9 @@ def _emit_perf_section(
     _emit_subtree(title, lines_out, children)
 
 
-def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
+def render_ascii_breakdown(
+    snap: MetricsSnapshot, *, hist_bucket: HistBucket = "total"
+) -> str:
     """两层 ASCII 树：图1 关键路径，图2 细化（含 PerfPoint、ZMQ/资源/Master 等）。"""
     bn = snap.by_name
     perf_map = _perf_map_for_snapshot(snap)
@@ -512,7 +610,7 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
     _emit_subtree(
         "[Client]",
         out,
-        [_fmt_hist_line("client_rpc_get_latency", bn)],
+        [_fmt_hist_line("client_rpc_get_latency", bn, bucket=hist_bucket)],
     )
     out.append("")
 
@@ -520,9 +618,9 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
         "[入口 Worker / 线程池]",
         out,
         [
-            _fmt_hist_line("worker_process_get_latency", bn),
-            _fmt_hist_line("worker_get_threadpool_queue_latency", bn),
-            _fmt_hist_line("worker_get_threadpool_exec_latency", bn),
+            _fmt_hist_line("worker_process_get_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_get_threadpool_queue_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_get_threadpool_exec_latency", bn, bucket=hist_bucket),
         ],
     )
     out.append("")
@@ -530,7 +628,7 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
     _emit_subtree(
         "[→ Master] 查 meta",
         out,
-        [_fmt_hist_line("worker_rpc_query_meta_latency", bn)],
+        [_fmt_hist_line("worker_rpc_query_meta_latency", bn, bucket=hist_bucket)],
     )
     out.append("")
 
@@ -538,9 +636,9 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
         "[→ 对端 Worker] 拉对象（日志旧名/新名二选一）",
         out,
         [
-            _fmt_hist_line("worker_rpc_get_remote_object_latency", bn),
-            _fmt_hist_line("worker_rpc_remote_get_outbound_latency", bn),
-            _fmt_hist_line("worker_rpc_remote_get_inbound_latency", bn),
+            _fmt_hist_line("worker_rpc_get_remote_object_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_rpc_remote_get_outbound_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_rpc_remote_get_inbound_latency", bn, bucket=hist_bucket),
         ],
     )
     out.append("")
@@ -549,9 +647,9 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
         "[URMA 数据面]",
         out,
         [
-            _fmt_hist_line("worker_urma_write_latency", bn),
-            _fmt_hist_line("worker_urma_wait_latency", bn),
-            _fmt_hist_line("urma_import_jfr", bn),
+            _fmt_hist_line("worker_urma_write_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_urma_wait_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("urma_import_jfr", bn, bucket=hist_bucket),
         ],
     )
     out.append("")
@@ -592,9 +690,9 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
         "[Worker CRUD / RPC 耗时]",
         out,
         [
-            _fmt_hist_line("worker_process_create_latency", bn),
-            _fmt_hist_line("worker_process_publish_latency", bn),
-            _fmt_hist_line("worker_rpc_create_meta_latency", bn),
+            _fmt_hist_line("worker_process_create_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_process_publish_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_rpc_create_meta_latency", bn, bucket=hist_bucket),
         ],
     )
     out.append("")
@@ -603,26 +701,26 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
         "[Get 后段 / 选址]",
         out,
         [
-            _fmt_hist_line("worker_get_meta_addr_hashring_latency", bn),
-            _fmt_hist_line("worker_get_post_query_meta_phase_latency", bn),
+            _fmt_hist_line("worker_get_meta_addr_hashring_latency", bn, bucket=hist_bucket),
+            _fmt_hist_line("worker_get_post_query_meta_phase_latency", bn, bucket=hist_bucket),
         ],
     )
     out.append("")
 
     zmq_us = [
-        _fmt_hist_line("zmq_send_io_latency", bn),
-        _fmt_hist_line("zmq_receive_io_latency", bn),
-        _fmt_hist_line("zmq_rpc_serialize_latency", bn),
-        _fmt_hist_line("zmq_rpc_deserialize_latency", bn),
+        _fmt_hist_line("zmq_send_io_latency", bn, bucket=hist_bucket),
+        _fmt_hist_line("zmq_receive_io_latency", bn, bucket=hist_bucket),
+        _fmt_hist_line("zmq_rpc_serialize_latency", bn, bucket=hist_bucket),
+        _fmt_hist_line("zmq_rpc_deserialize_latency", bn, bucket=hist_bucket),
     ]
     _emit_subtree("[ZMQ] IO/序列化（µs，ScopedTimer）", out, zmq_us)
     out.append("")
 
     zmq_ns_lines: List[Optional[str]] = []
     for zk in sorted(ZMQ_HISTOGRAM_NS):
-        line = _fmt_hist_line(zk, bn, ns=True)
+        line = _fmt_hist_line(zk, bn, ns=True, bucket=hist_bucket)
         if line and zk == "zmq_server_reply_latency":
-            p = _hist_parts(bn, zk)
+            p = _hist_parts(bn, zk, bucket=hist_bucket)
             if p and p[2] > 10**15:
                 line = f"{zk}  (跳过展示: max 异常大，tick 不可靠)"
         zmq_ns_lines.append(line)
@@ -630,23 +728,23 @@ def render_ascii_breakdown(snap: MetricsSnapshot) -> str:
     out.append("")
 
     res_children = [
-        _fmt_scalar_line("worker_object_count", bn),
-        _fmt_scalar_line("worker_allocated_memory_size", bn),
-        _fmt_scalar_line("worker_allocator_alloc_bytes_total", bn),
-        _fmt_scalar_line("worker_allocator_free_bytes_total", bn),
-        _fmt_scalar_line("worker_shm_unit_created_total", bn),
-        _fmt_scalar_line("worker_shm_unit_destroyed_total", bn),
-        _fmt_scalar_line("worker_object_erase_total", bn),
+        _fmt_scalar_line("worker_object_count", bn, bucket=hist_bucket),
+        _fmt_scalar_line("worker_allocated_memory_size", bn, bucket=hist_bucket),
+        _fmt_scalar_line("worker_allocator_alloc_bytes_total", bn, bucket=hist_bucket),
+        _fmt_scalar_line("worker_allocator_free_bytes_total", bn, bucket=hist_bucket),
+        _fmt_scalar_line("worker_shm_unit_created_total", bn, bucket=hist_bucket),
+        _fmt_scalar_line("worker_shm_unit_destroyed_total", bn, bucket=hist_bucket),
+        _fmt_scalar_line("worker_object_erase_total", bn, bucket=hist_bucket),
     ]
     _emit_subtree("[资源 / SHM / 分配器]", out, res_children)
     out.append("")
 
     master_children = [
-        _fmt_scalar_line("master_object_meta_table_size", bn),
-        _fmt_scalar_line("master_ttl_pending_size", bn),
-        _fmt_scalar_line("master_ttl_fire_total", bn),
-        _fmt_scalar_line("master_ttl_delete_success_total", bn),
-        _fmt_scalar_line("master_ttl_delete_failed_total", bn),
+        _fmt_scalar_line("master_object_meta_table_size", bn, bucket=hist_bucket),
+        _fmt_scalar_line("master_ttl_pending_size", bn, bucket=hist_bucket),
+        _fmt_scalar_line("master_ttl_fire_total", bn, bucket=hist_bucket),
+        _fmt_scalar_line("master_ttl_delete_success_total", bn, bucket=hist_bucket),
+        _fmt_scalar_line("master_ttl_delete_failed_total", bn, bucket=hist_bucket),
     ]
     _emit_subtree("[Master 同进程指标]（若存在）", out, master_children)
     out.append("")
@@ -754,10 +852,19 @@ def render_report(
     bench_stats: Optional[Dict[str, str]] = None,
     perf_paths: Optional[List[str]] = None,
     perf_keys: Optional[List[str]] = None,
+    *,
+    hist_bucket: HistBucket = "total",
 ) -> str:
     parts: List[str] = []
     parts.append("### 性能 Breakdown 报告（自动生成）\n")
     parts.append(f"- **metrics 来源**: `{snap.source_line_hint}`\n")
+    if hist_bucket == "delta":
+        parts.append(
+            "- **统计口径**: 直方图与各指标展示 **delta** 桶（本 interval 增量）；"
+            "同一输入文件多行 `metrics_summary` 时，delta 报告 **按 delta 负载最大的一行**选取。\n"
+        )
+    else:
+        parts.append("- **统计口径**: 直方图与各指标展示 **total** 桶（累计）。\n")
     if snap.cycle is not None:
         parts.append(
             f"- **cycle** / **interval_ms** / **part**: {snap.cycle} / "
@@ -782,7 +889,9 @@ def render_report(
                 continue
             any_m = True
             parts.append(f"- {desc}\n")
-            parts.append(f"  - `{format_histogram_total(item)}`\n")
+            parts.append(
+                f"  - `{format_histogram_total(item, bucket=hist_bucket)}`\n"
+            )
         if not any_m:
             parts.append("- *（本 snapshot 无此段指标）*\n")
         parts.append("\n")
@@ -809,12 +918,17 @@ def render_report(
     return "".join(parts)
 
 
-def render_table_row(source: str, snap: MetricsSnapshot) -> str:
+def render_table_row(
+    source: str,
+    snap: MetricsSnapshot,
+    *,
+    hist_bucket: HistBucket = "total",
+) -> str:
     def avg(name: str) -> str:
         it = snap.by_name.get(name)
         if not it:
             return "-"
-        t = it.get("total")
+        t = it.get(hist_bucket)
         if isinstance(t, dict) and "avg_us" in t:
             return str(t["avg_us"])
         return "-"
@@ -831,6 +945,101 @@ def render_table_row(source: str, snap: MetricsSnapshot) -> str:
     return "| " + " | ".join(str(c) for c in cols) + f" | `{source}` |"
 
 
+def _ensure_parent_dir(path: str) -> None:
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+
+
+def write_metrics_summary_json_bundle(
+    out_path: str,
+    *,
+    pairs_total: List[Tuple[str, dict]],
+    pairs_delta: List[Tuple[str, dict]],
+    last_only_total: bool,
+) -> None:
+    """将 total / delta 选取对应的原始 metrics_summary 对象格式化写入单个 JSON。"""
+    _ensure_parent_dir(out_path)
+    payload: Dict[str, Any] = {
+        "schema": "kv_perf_report_metrics_summary_v1",
+        "total_selection": {"last_only": last_only_total},
+        "delta_selection": {
+            "rule": (
+                "per_input_file_pick_row_with_max_histogram_delta_load"
+            ),
+            "preferred_keys_order": list(_DELTA_SCORE_PREFERRED_KEYS),
+            "tie_break": "max_source_line_number",
+        },
+        "total": [{"source": s, "metrics_summary": dict(obj)} for s, obj in pairs_total],
+        "delta_selected": [
+            {"source": s, "metrics_summary": dict(obj)} for s, obj in pairs_delta
+        ],
+    }
+    with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+
+
+def _write_output(text: str, output_path: Optional[str]) -> None:
+    """Write UTF-8 report to output_path or stdout."""
+    if output_path:
+        with open(output_path, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(text)
+    else:
+        sys.stdout.write(text)
+
+
+def _compact_markdown_report(
+    snapshots: List[MetricsSnapshot],
+    bench_stats: Optional[Dict[str, str]],
+    perf_paths: List[str],
+    perf_keys: List[str],
+    hist_bucket: HistBucket,
+) -> str:
+    out: List[str] = []
+    for i, snap in enumerate(snapshots):
+        if len(snapshots) > 1:
+            out.append(f"---\n\n## Snapshot {i + 1} / {len(snapshots)}\n\n")
+        out.append(
+            render_report(
+                snap,
+                bench_stats=bench_stats if i == 0 else None,
+                perf_paths=perf_paths,
+                perf_keys=perf_keys,
+                hist_bucket=hist_bucket,
+            )
+        )
+    return "\n".join(out)
+
+
+def _ascii_report_text(
+    snapshots: List[MetricsSnapshot], hist_bucket: HistBucket
+) -> str:
+    chunks: List[str] = []
+    for i, snap in enumerate(snapshots):
+        if len(snapshots) > 1:
+            chunks.append(f"########## 输入 {i + 1}/{len(snapshots)} ##########\n")
+        chunks.append(render_ascii_breakdown(snap, hist_bucket=hist_bucket))
+    return "\n\n".join(chunks)
+
+
+def _table_report_text(
+    snapshots: List[MetricsSnapshot], hist_bucket: HistBucket
+) -> str:
+    table_lines = [
+        "| cycle | client_rpc_get_µs | worker_process_get_µs | query_meta_µs | "
+        "get_remote_obj_µs | remote_out_µs | urma_wait_µs | source |",
+        "|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for snap in snapshots:
+        table_lines.append(
+            render_table_row(
+                snap.source_line_hint, snap, hist_bucket=hist_bucket
+            )
+        )
+    return "\n".join(table_lines) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Generate KV perf Markdown report from metrics_summary logs.")
     ap.add_argument(
@@ -838,6 +1047,21 @@ def main() -> int:
         nargs="*",
         default=["-"],
         help="glog or text files (default: stdin)",
+    )
+    ap.add_argument(
+        "-o",
+        "--output",
+        metavar="FILE",
+        help="Write report to FILE (UTF-8) instead of stdout (ignored if --dual-out is set)",
+    )
+    ap.add_argument(
+        "--dual-out",
+        nargs="?",
+        const="output",
+        default=None,
+        metavar="STEM",
+        help="Write STEM_total.log / STEM_delta.log / STEM.json (pretty metrics_summary bundle); "
+        'default STEM=output',
     )
     ap.add_argument(
         "--bench-stats",
@@ -869,56 +1093,87 @@ def main() -> int:
 
     bench = parse_bench_stats(args.bench_stats) if args.bench_stats else None
 
-    snapshots: List[MetricsSnapshot] = []
-    for path in args.logs:
-        last: Optional[MetricsSnapshot] = None
-        for hint, obj in iter_metrics_summary_objects(path):
-            snap = snapshot_from_obj(hint, obj)
-            if args.last_only:
-                last = snap
-            else:
-                snapshots.append(snap)
-        if args.last_only and last is not None:
-            snapshots.append(last)
+    pairs_total = collect_summary_pairs(args.logs, args.last_only)
+    snapshots_total = [snapshot_from_obj(h, o) for h, o in pairs_total]
 
-    if not snapshots:
+    if not snapshots_total:
         print("No metrics_summary found.", file=sys.stderr)
         return 1
-
-    if args.ascii_tree:
-        for i, snap in enumerate(snapshots):
-            if len(snapshots) > 1:
-                print(f"########## 输入 {i + 1}/{len(snapshots)} ##########\n")
-            print(render_ascii_breakdown(snap))
-            if i < len(snapshots) - 1:
-                print()
-        return 0
 
     perf_keys = [k.strip() for k in args.perf_keys.split(",") if k.strip()]
     perf_paths = list(args.logs)
 
-    if args.table:
-        print("| cycle | client_rpc_get_µs | worker_process_get_µs | query_meta_µs | "
-              "get_remote_obj_µs | remote_out_µs | urma_wait_µs | source |")
-        print("|---:|---:|---:|---:|---:|---:|---:|---|")
-        for snap in snapshots:
-            print(render_table_row(snap.source_line_hint, snap))
+    if args.dual_out is not None:
+        if args.output:
+            print("Note: -o/--output is ignored when --dual-out is set.", file=sys.stderr)
+        stem = args.dual_out
+        path_total = f"{stem}_total.log"
+        path_delta = f"{stem}_delta.log"
+        path_json = f"{stem}.json"
+        _ensure_parent_dir(path_total)
+        _ensure_parent_dir(path_delta)
+
+        pairs_delta = summary_pairs_max_delta_per_path(args.logs)
+        snapshots_delta = [snapshot_from_obj(h, o) for h, o in pairs_delta]
+
+        if not snapshots_delta:
+            print(
+                "No metrics_summary for delta snapshots (unexpected).",
+                file=sys.stderr,
+            )
+            return 1
+
+        write_metrics_summary_json_bundle(
+            path_json,
+            pairs_total=pairs_total,
+            pairs_delta=pairs_delta,
+            last_only_total=args.last_only,
+        )
+
+        if args.ascii_tree:
+            _write_output(_ascii_report_text(snapshots_total, "total"), path_total)
+            _write_output(_ascii_report_text(snapshots_delta, "delta"), path_delta)
+            return 0
+
+        if args.table:
+            _write_output(_table_report_text(snapshots_total, "total"), path_total)
+            _write_output(_table_report_text(snapshots_delta, "delta"), path_delta)
+            return 0
+
+        _write_output(
+            _compact_markdown_report(
+                snapshots_total, bench, perf_paths, perf_keys, "total"
+            ),
+            path_total,
+        )
+        _write_output(
+            _compact_markdown_report(
+                snapshots_delta, bench, perf_paths, perf_keys, "delta"
+            ),
+            path_delta,
+        )
         return 0
 
-    # Merge by default: if multiple files each contribute one last snapshot, report each as separate section
-    out: List[str] = []
-    for i, snap in enumerate(snapshots):
-        if len(snapshots) > 1:
-            out.append(f"---\n\n## Snapshot {i + 1} / {len(snapshots)}\n\n")
-        out.append(
-            render_report(
-                snap,
-                bench_stats=bench if i == 0 else None,
-                perf_paths=perf_paths,
-                perf_keys=perf_keys,
-            )
+    if args.ascii_tree:
+        _write_output(
+            _ascii_report_text(snapshots_total, "total"),
+            args.output,
         )
-    sys.stdout.write("\n".join(out))
+        return 0
+
+    if args.table:
+        _write_output(
+            _table_report_text(snapshots_total, "total"),
+            args.output,
+        )
+        return 0
+
+    _write_output(
+        _compact_markdown_report(
+            snapshots_total, bench, perf_paths, perf_keys, "total"
+        ),
+        args.output,
+    )
     return 0
 
 
