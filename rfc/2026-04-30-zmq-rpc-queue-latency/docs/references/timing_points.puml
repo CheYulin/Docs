@@ -1,5 +1,6 @@
 @startuml ZMQ RPC Metrics - Full Lifecycle
-' Superseded for **code-aligned** lifecycle: see **timing_points_current.puml**.
+' Superseded for **code-aligned** lifecycle: see **../timing_points_current.puml**.
+' Plot still mentions CLIENT_STUB_SEND / metrics not in kv_metrics queue flow — **do not treat as shipped**.
 !pragma teoz true
 skinparam backgroundColor #FEFEFE
 skinparam actorBorderColor #666666

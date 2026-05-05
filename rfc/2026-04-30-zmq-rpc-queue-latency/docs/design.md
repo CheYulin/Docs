@@ -1,338 +1,129 @@
 # Design: ZMQ RPC 队列时延可观测
 
-## 1. 背景与目标
+本文与 **`yuanrong-datasystem`** 当前实现一致，依据：
 
-### 1.1 问题
-
-当前 RPC 框架的延迟只能看到端到端（E2E）时间，无法定位瓶颈在哪个阶段：
-
-```
-E2E 延迟高 = Client 框架慢？ Client Socket 慢？ 网络慢？ Server 队列慢？ Server 执行慢？ Server 回复慢？
-```
-
-### 1.2 目标
-
-通过在 `MetaPb.ticks` 中记录关键时间点，在 Client 侧计算各阶段延迟，实现：
-
-1. **自证清白**：任何一个阶段的延迟都可以被独立识别
-2. **最小代价**：不新增 proto 字段，不修改网络协议
-3. **进程内计算**：所有 Metric 在进程内完成统计
+- `src/datasystem/common/rpc/zmq/zmq_constants.h`（`RecordTick`、`RecordServerLatencyMetrics`、`RecordRpcLatencyMetrics`）
+- `src/datasystem/common/metrics/kv_metrics.{h,cpp}`（Histogram ID 与导出名字）
 
 ---
 
-## 2. 时间线与 Tick 定义
+## 1. 目标
 
-### 2.1 完整路径时间线
+在 **`MetaPb.ticks`** 中记录少量时间点，在进程内计算 **6 个队列相关 Histogram**，用于：
 
-```
-                    CLIENT                                 SERVER
-                       │                                     │
-                       │          REQUEST PATH               │
-                       ▼                                     ▼
-               ┌───────────────────────────────────────────────────────────────┐
-               │                                                                   │
-   CLIENT_ENQUEUE ────┬──── CLIENT_TO_STUB ────┬──── CLIENT_SEND              │
-       │              │         │              │         │                      │
-       │   CLIENT     │         │   CLIENT     │         │   SERVER               │
-       │  QUEUING     │         │ STUB_SEND   │         │  QUEUE_WAIT           │
-       │              │         │              │         │        │                │
-       │◄────────────┼─────────┼─────────────┼─────────┼────────┼────────────────►│
-       │              │         │              │         │        │                 │
-       │              │         │              │         │        │                 │
-       │              │         │              │         │ SERVER_RECV           │
-       │              │         │              │         │◄────────┼────────────────►│
-       │              │         │              │         │        │                 │
-       │              │         │              │         │        │                 │
-   ────┴─────────────┴─────────┴──────────────┴─────────┴────────┴─────────────────┴────────►
-   CLIENT_ENQUEUE   CLIENT_TO_STUB CLIENT_SEND  SERVER_RECV SERVER_DEQUEUE SERVER_EXEC_END SERVER_SEND CLIENT_RECV
-```
-
-### 2.2 Tick 定义（8个）
-
-| Tick 名称 | 记录位置 | 进程 | 含义 |
-|-----------|---------|------|------|
-| `CLIENT_ENQUEUE` | `ZmqStubImpl.h L149`，`mQue->SendMsg()` 之前 | Client | Client 调用 stub 入口 |
-| `CLIENT_TO_STUB` | `ZmqFrontend L403`，`msgQue_->Send()` 之前 | Client | 消息进入 frontend 发送队列 |
-| `CLIENT_SEND` | `ZmqFrontend L124`，`SendAllFrames()` 之后 | Client | zmq_msg_send 返回，发送完成 |
-| `CLIENT_RECV` | `ZmqStubImpl.h L213`，收到响应后 | Client | Client 收到完整 reply |
-| `SERVER_RECV` | `ZmqService L1222`，`zmq_msg_recv` 返回后 | Server | Socket 接收完成 |
-| `SERVER_DEQUEUE` | `ZmqService L755`，`WorkerEntryImpl()` 调用前 | Server | 从 worker 队列取出，开始处理 |
-| `SERVER_EXEC_END` | `ZmqService L762`，`WorkerEntryImpl()` 返回后 | Server | 业务 handler 处理完成 |
-| `SERVER_SEND` | `ZmqService L1030，`reply zmq_msg_send` 返回后 | Server | Server 回复发送完成 |
-
-> **注意**：代码实际在 `WorkerEntryImpl` **返回之后**记录 `SERVER_EXEC_END`（而非之前）。这是因为 `ServiceToClient` 在 `WorkerEntryImpl` 内部被调用，`SERVER_EXEC_END` 必须在调用 `ServiceToClient` 之前记录，才能在 reply meta 中正确追加 tick。
-
-### 2.3 常量定义
-
-**文件**: `src/datasystem/common/rpc/zmq/zmq_constants.h`
-
-```cpp
-namespace datasystem {
-
-// ==================== RPC Tracing Ticks ====================
-inline constexpr const char* TICK_CLIENT_ENQUEUE = "CLIENT_ENQUEUE";
-inline constexpr const char* TICK_CLIENT_TO_STUB = "CLIENT_TO_STUB";
-inline constexpr const char* TICK_CLIENT_SEND = "CLIENT_SEND";
-inline constexpr const char* TICK_CLIENT_RECV = "CLIENT_RECV";
-inline constexpr const char* TICK_SERVER_RECV = "SERVER_RECV";
-inline constexpr const char* TICK_SERVER_DEQUEUE = "SERVER_DEQUEUE";
-inline constexpr const char* TICK_SERVER_EXEC_END = "SERVER_EXEC_END";
-inline constexpr const char* TICK_SERVER_SEND = "SERVER_SEND";
-
-// ==================== RPC Tracing Helpers ====================
-inline uint64_t GetTimeSinceEpoch()
-{
-    return std::chrono::high_resolution_clock::now().time_since_epoch().count();
-}
-
-inline uint64_t RecordTick(MetaPb& meta, const char* tickName)
-{
-    auto ts = GetTimeSinceEpoch();
-    TickPb tick;
-    tick.set_ts(ts);
-    tick.set_tick_name(tickName);
-    meta.mutable_ticks()->Add(std::move(tick));
-    return ts;
-}
-
-inline uint64_t GetTotalTicksTime(const MetaPb& meta)
-{
-    auto n = meta.ticks_size();
-    if (n > 1) {
-        return meta.ticks(n - 1).ts() - meta.ticks(0).ts();
-    }
-    return 0;
-}
-
-}  // namespace datasystem
-```
+- Client stub 出站排队
+- Server 入 worker 队列等待、业务、回包前置
+- 调用方 E2E
+- 与 **server 嵌入式窗口** 混合运算得到的 **network 残差**（非独立 RTT 测量）
 
 ---
 
-## 3. Metric 定义
+## 2. Tick 清单（`zmq_constants.h`）
 
-### 3.1 Metric 清单
+### 2.1 Wall ticks（`ts` = `high_resolution_clock` 时刻）
 
-**文件**: `src/datasystem/common/metrics/kv_metrics.h`
+| 常量 | `tick_name` | 典型记录位置 |
+|------|-------------|----------------|
+| `TICK_CLIENT_ENQUEUE` | `CLIENT_ENQUEUE` | `zmq_stub_impl.h` **AsyncWriteImpl**；`zmq_unary_client_impl.h` **SendAll** |
+| `TICK_CLIENT_TO_STUB` | `CLIENT_TO_STUB` | `zmq_stub_conn.cpp` **ZmqStubConnMgrImpl::Outbound** 开始；Unary **SendConnMsg** 可补打 |
+| `TICK_CLIENT_RECV` | `CLIENT_RECV` | `zmq_stub_impl.h` **AsyncReadImpl**；`zmq_unary_client_impl.h` **ReadImpl** |
+| `TICK_SERVER_RECV` | `SERVER_RECV` | `zmq_service.cpp` **FrontendToBackend** |
+| `TICK_SERVER_DEQUEUE` | `SERVER_DEQUEUE` | `zmq_service.cpp` **WorkerEntry**，**ReceiveMsg** 之后 |
+| `TICK_SERVER_EXEC_END` | `SERVER_EXEC_END` | **WorkerEntry** 尾部；`zmq_server_stream_base.h` Unary **Write**/**SendAll** 可更早打 |
+| `TICK_SERVER_SEND` | `SERVER_SEND` | `zmq_service.cpp` **ServiceToClient**；构造里 **routingFn\_**（`!multiDestinations_` 时在 **Put** 前） |
 
-```cpp
-// RPC Queue Flow Latency (新增 7 个 Histogram, ID 36-42)
-ZMQ_CLIENT_QUEUING_LATENCY,       // CLIENT_TO_STUB - CLIENT_ENQUEUE
-ZMQ_CLIENT_STUB_SEND_LATENCY,     // CLIENT_SEND - CLIENT_TO_STUB
-ZMQ_SERVER_QUEUE_WAIT_LATENCY,     // SERVER_DEQUEUE - SERVER_RECV
-ZMQ_SERVER_EXEC_LATENCY,           // SERVER_EXEC_END - SERVER_DEQUEUE
-ZMQ_SERVER_REPLY_LATENCY,         // SERVER_SEND - SERVER_EXEC_END
-ZMQ_RPC_E2E_LATENCY,               // CLIENT_RECV - CLIENT_ENQUEUE
-ZMQ_RPC_NETWORK_LATENCY,           // E2E - (SERVER_EXEC + SERVER_QUEUE_WAIT)
+**故意不记录**：在 **真正的 `zmq_msg_send` 完成** 处打 **MetaPb** tick（无 `CLIENT_ZMQ_SEND` 等常量）；STUB 之后到 socket 的区间 **无单独 Histogram**。
 
-WORKER_ALLOCATOR_ALLOC_BYTES_TOTAL,  // 原 ID 36 → 43
-```
+### 2.2 合成 ticks（`ts` 字段存 **时长 ns**，非墙钟）
 
-**根因对照表**：
+| 常量 | `tick_name` | 写入 |
+|------|-------------|------|
+| `TICK_SERVER_EXEC_NS` | `SERVER_EXEC_NS` | **`RecordServerLatencyMetrics`**：`ts := ts(SERVER_EXEC_END) − ts(SERVER_RECV)`（若 `exec_end > recv`） |
+| `TICK_SERVER_RPC_WINDOW_NS` | `SERVER_RPC_WINDOW_NS` | **`RecordServerLatencyMetrics`**：`ts := ts(SERVER_SEND) − ts(SERVER_RECV)`（若 `send > recv`） |
 
-| Metric | 含义 | 可能根因 |
-|--------|------|---------|
-| `CLIENT_QUEUING_LATENCY` | 消息在 client 侧入队列前的等待 | Client MsgQue 堆积，prefetcher 处理不过来 |
-| `CLIENT_STUB_SEND_LATENCY` | ZmqFrontend 内部排队 + zmq_msg_send 耗时 | ZmqFrontend 线程繁忙，或 socket I/O 慢 |
-| `SERVER_QUEUE_WAIT_LATENCY` | 消息在 server 侧 worker 队列中的等待 | Server 请求队列堆积 |
-| `SERVER_EXEC_LATENCY` | 业务 handler 执行耗时 | 业务逻辑慢 |
-| `SERVER_REPLY_LATENCY` | reply 的 zmq_msg_send 耗时 | socket buffer 满或网络抖动 |
-| `RPC_E2E_LATENCY` | 端到端耗时 | - |
-| `RPC_NETWORK_LATENCY` | 往返网络耗时（request 发送 + reply 接收） | 网络本身或 Server 框架慢传导 |
-
-### 3.2 Metric 正交性
-
-所有 5 个开销 metric 都是**正交**的（时间不重叠）：
-
-|  | CLIENT_QUEUING | CLIENT_STUB_SEND | SERVER_QUEUE_WAIT | SERVER_EXEC | SERVER_REPLY |
-|--|-----------------|------------------|------------------|-------------|--------------|
-| **CLIENT_QUEUING** | - | ✓ 不重叠 | ✓ 不重叠 | ✓ 不重叠 | ✓ 不重叠 |
-| **CLIENT_STUB_SEND** | ✓ 不重叠 | - | ✓ 不重叠 | ✓ 不重叠 | ✓ 不重叠 |
-| **SERVER_QUEUE_WAIT** | ✓ 不重叠 | ✓ 不重叠 | - | ✓ 不重叠 | ✓ 不重叠 |
-| **SERVER_EXEC** | ✓ 不重叠 | ✓ 不重叠 | ✓ 不重叠 | - | ✓ 不重叠 |
-| **SERVER_REPLY** | ✓ 不重叠 | ✓ 不重叠 | ✓ 不重叠 | ✓ 不重叠 | - |
+说明：`SERVER_EXEC_NS` **从 RECV 量到 EXEC_END**，在墙钟意义上 **包含** worker 队列等待 + 业务段；命名来自历史，阅读时以公式为准。
 
 ---
 
-## 4. 计算公式
+## 3. Histogram 清单（queue flow 仅 6 个）
 
-### 4.1 Client 侧计算
+`kv_metrics.cpp` 导出名字（单位 **µs**），采样时 **`RecordLatencyMetric(id, deltaNs)`** 内部 **`Observe(NsToUs(deltaNs))`**。
 
-**位置**: `ZmqStubImpl.h` — `RecordRpcLatencyMetrics()`
+| `KvMetricId` | 导出名字 | 计算（**ns** 差分后入 `RecordLatencyMetric`） |
+|--------------|----------|-----------------------------------------------|
+| `ZMQ_CLIENT_QUEUING_LATENCY` | `zmq_client_queuing_latency` | `TsStub − TsEnqueue`，当 `TsStub > TsEnqueue` |
+| `ZMQ_SERVER_QUEUE_WAIT_LATENCY` | `zmq_server_queue_wait_latency` | `TsDequeue − TsRecv`，当 `TsDequeue > TsRecv` |
+| `ZMQ_SERVER_EXEC_LATENCY` | `zmq_server_exec_latency` | `TsExecEnd − TsDequeue`，当 `TsExecEnd > TsDequeue` |
+| `ZMQ_SERVER_REPLY_LATENCY` | `zmq_server_reply_latency` | `TsSend − TsExecEnd`，当 **`TsExecEnd > 0`** 且 `TsSend > TsExecEnd` |
+| `ZMQ_RPC_E2E_LATENCY` | `zmq_rpc_e2e_latency` | `TsClientRecv − TsEnqueue`，当 `TsClientRecv > TsEnqueue` |
+| `ZMQ_RPC_NETWORK_LATENCY` | `zmq_rpc_network_latency` | 见 §4.2 **残差** |
 
-```cpp
-// E2E = CLIENT_RECV - CLIENT_ENQUEUE（通过 GetTotalTicksTime）
-uint64_t e2eNs = GetTotalTicksTime(meta);
-
-// 从 reply meta 中提取各 tick
-uint64_t serverExecNs = FindTickTs(meta, "SERVER_EXEC_NS");
-uint64_t clientEnqueueTs = FindTickTs(meta, TICK_CLIENT_ENQUEUE);
-uint64_t clientToStubTs = FindTickTs(meta, TICK_CLIENT_TO_STUB);
-uint64_t clientSendTs = FindTickTs(meta, TICK_CLIENT_SEND);
-
-// NETWORK = E2E - SERVER_EXEC_NS
-uint64_t networkNs = (e2eNs > serverExecNs) ? (e2eNs - serverExecNs) : 0;
-
-// CLIENT_QUEUING = CLIENT_TO_STUB - CLIENT_ENQUEUE
-if (clientToStubTs > clientEnqueueTs) {
-    metrics::GetHistogram(ZMQ_CLIENT_QUEUING_LATENCY)
-        .Observe(clientToStubTs - clientEnqueueTs);
-}
-
-// CLIENT_STUB_SEND = CLIENT_SEND - CLIENT_TO_STUB
-if (clientSendTs > clientToStubTs) {
-    metrics::GetHistogram(ZMQ_CLIENT_STUB_SEND_LATENCY)
-        .Observe(clientSendTs - clientToStubTs);
-}
-
-// E2E
-if (e2eNs > 0) {
-    metrics::GetHistogram(ZMQ_RPC_E2E_LATENCY).Observe(e2eNs);
-}
-
-// NETWORK
-if (networkNs > 0) {
-    metrics::GetHistogram(ZMQ_RPC_NETWORK_LATENCY).Observe(networkNs);
-}
-```
-
-### 4.2 Server 侧计算
-
-**位置**: `ZmqService.cpp` — `RecordServerLatencyMetrics()`
-
-```cpp
-// 提取各 tick
-int64_t serverRecvTs = FindTickTs(meta, TICK_SERVER_RECV);
-int64_t serverDequeuTs = FindTickTs(meta, TICK_SERVER_DEQUEUE);
-int64_t serverExecEndTs = FindTickTs(meta, TICK_SERVER_EXEC_END);
-int64_t serverSendTs = FindTickTs(meta, TICK_SERVER_SEND);
-
-// SERVER_QUEUE_WAIT = SERVER_DEQUEUE - SERVER_RECV
-if (serverDequeuTs > serverRecvTs) {
-    metrics::GetHistogram(ZMQ_SERVER_QUEUE_WAIT_LATENCY)
-        .Observe(serverDequeuTs - serverRecvTs);
-}
-
-// SERVER_EXEC = SERVER_EXEC_END - SERVER_DEQUEUE
-if (serverExecEndTs > serverDequeuTs) {
-    metrics::GetHistogram(ZMQ_SERVER_EXEC_LATENCY)
-        .Observe(serverExecEndTs - serverDequeuTs);
-}
-
-// SERVER_REPLY = SERVER_SEND - SERVER_EXEC_END
-if (serverSendTs > serverExecEndTs) {
-    metrics::GetHistogram(ZMQ_SERVER_REPLY_LATENCY)
-        .Observe(serverSendTs - serverExecEndTs);
-}
-
-// 计算 SERVER_EXEC_NS 并追加到 meta.ticks 传回 Client
-// ★ 注意：当前实现 = SERVER_EXEC_END - SERVER_RECV（包含 QUEUE_WAIT）
-//   正确应为：SERVER_EXEC_END - SERVER_DEQUEUE
-uint64_t serverExecNs = (serverExecEndTs > serverRecvTs) ? (serverExecEndTs - serverRecvTs) : 0;
-TickPb execTick;
-execTick.set_ts(serverExecNs);
-execTick.set_tick_name("SERVER_EXEC_NS");
-meta.mutable_ticks()->Add(std::move(execTick));
-```
-
-**调用位置**: `ZmqService::ServiceToClient()` L1030-1031：
-
-```cpp
-RecordTick(meta, TICK_SERVER_SEND);         // L1030
-RecordServerLatencyMetrics(meta);            // L1031
-```
+**不在本设计范围**：`ZMQ_RPC_SERIALIZE_LATENCY`、`ZMQ_RPC_DESERIALIZE_LATENCY` 等同文件其它 ZMQ 指标；**无** `ZMQ_CLIENT_STUB_SEND_LATENCY`（历史文档曾出现，已删除）。
 
 ---
 
-## 5. 核心等式（自证清白）
+## 4. 计算逻辑（与源码一致）
 
-### 5.1 各阶段耗时组成
+### 4.1 `RecordServerLatencyMetrics(MetaPb &meta)`（Server 侧）
 
-```
-E2E = CLIENT_QUEUING + CLIENT_STUB_SEND + SERVER_QUEUE_WAIT + SERVER_EXEC + SERVER_REPLY + NETWORK
+1. 扫描 ticks，取 **最后一个** 匹配的 `TsRecv`、`TsDequeue`、`TsExecEnd`、`TsSend`（同名多次则以实现遍历顺序为准；通常每个名一条）。
+2. 按 §3 表 Observe **前三项 server span** 与 **reply**。
+3. 追加合成：`SERVER_EXEC_NS`、`SERVER_RPC_WINDOW_NS`（§2.2）。
 
-其中：
-  NETWORK = E2E - SERVER_EXEC_NS
-          = E2E - (SERVER_EXEC + SERVER_QUEUE_WAIT)      ← ★ SERVER_EXEC_NS 当前包含 QUEUE_WAIT
-          = CLIENT_STUB_SEND + (actual network round-trip) + SERVER_REPLY
-```
+### 4.2 `RecordRpcLatencyMetrics(MetaPb &meta)`（Client 侧）
 
-> 由于 `SERVER_EXEC_NS` 当前实现包含 `SERVER_QUEUE_WAIT`，`NETWORK` 指标实际代表：CLIENT_STUB_SEND 之后的全部时间（request 网络传输 + server 处理 + reply 网络传输），不完全是纯网络耗时。
+扫描得到 `TsEnqueue`、`TsStub`、`TsClientRecv`；以及 **`SERVER_RPC_WINDOW_NS` 合成 tick 的 `ts`**（记为 `srvWinMeta`），可选 `TsRecv`/`TsSend` 用于回退：
 
-### 5.2 定界决策树
+- `e2eNs = TsClientRecv − TsEnqueue`（若 `>` 0）
+- `clientFrameworkNs = TsStub − TsEnqueue`（若 `TsStub > TsEnqueue`）
+- `serverRpcWindowNs`：若 `srvWinMeta > 0` 用它；**否则**若 `TsSend > TsRecv` 用 `TsSend − TsRecv`
+- `networkResidualNs`：仅当 `e2eNs > 0`、`serverRpcWindowNs > 0`、`clientFrameworkNs < e2eNs`：  
+  `after = e2eNs − clientFrameworkNs`；`networkResidualNs = (after > serverRpcWindowNs) ? (after − serverRpcWindowNs) : 0`
 
-```
-RPC 延迟高？
-      │
-      ├── CLIENT_QUEUING 高 → Client 侧 MsgQue 队列堆积
-      ├── CLIENT_STUB_SEND 高 → ZmqFrontend 线程繁忙，或 zmq_msg_send 慢
-      │
-      ├── SERVER_QUEUE_WAIT 高 → Server 侧请求队列等待
-      ├── SERVER_EXEC 高 → Server 业务逻辑慢
-      ├── SERVER_REPLY 高 → Server reply zmq_msg_send 慢（socket buffer 满或网络抖动）
-      │
-      └── NETWORK 高 → 网络延迟或 Server 框架慢传导
-          ├── CLIENT_STUB_SEND 正常 → Client 端无问题
-          ├── SERVER_EXEC + SERVER_QUEUE_WAIT 正常 → Server 端无问题
-          └── 则问题在网络本身
-```
+再按 §3 Observe **queuing、e2e、network（仅当 residual > 0）**。
+
+**不要**将 `E2E` 写成「各 server span 与 clientFramework 的简单求和」：server 与 client **时钟不同**，**network** 为 **残差**而不是第四段「正交」socket 时间。
 
 ---
 
-## 6. 向后兼容性
+## 5. Span 汇总表（文档用语）
 
-1. **旧 Server 无 `SERVER_EXEC_NS`**：Client 端 network = E2E（无法分离）
-2. **旧 Client 不记录 Client 侧 Tick**：Server 侧 metrics 正常计算，Client 侧 E2E 正常计算
-3. **所有 tick 为空**：`GetTotalTicksTime` 返回 0，所有 metric 不记录
+记 **[1]…[7]** 为 §2.1 中 wall tick 的顺序编号（与 **`timing_points_current.puml`** 一致），**`Ts(k)`** 为对应墙的 `ts`：
 
----
+| Span | 公式 | Histogram |
+|------|------|-----------|
+| Client queuing | `Ts(2) − Ts(1)` | `zmq_client_queuing_latency` |
+| Server queue wait | `Ts(4) − Ts(3)` | `zmq_server_queue_wait_latency` |
+| Server exec | `Ts(5) − Ts(4)` | `zmq_server_exec_latency` |
+| Server reply | `Ts(6) − Ts(5)` | `zmq_server_reply_latency`（需 **`Ts(5)>0`**） |
+| E2E（client 时钟） | `Ts(7) − Ts(1)` | `zmq_rpc_e2e_latency` |
+| Network residual | §4.2 | `zmq_rpc_network_latency` |
 
-## 7. 已知 Bug（PR #707 合并后仍存在）
-
-### Bug 1: `SERVER_EXEC_NS` 定义错误
-
-| | 设计意图 | 当前实现 |
-|--|---------|---------|
-| `SERVER_EXEC_NS` | `SERVER_EXEC_END - SERVER_DEQUEUE`（纯业务执行时间） | `SERVER_EXEC_END - SERVER_RECV`（包含 SERVER_QUEUE_WAIT） |
-
-**影响**: `zmq_rpc_network_latency` 被高估了 `SERVER_QUEUE_WAIT` 的时间，不能真实反映网络耗时。
-
-**修复方案**: 将 `zmq_service.cpp L81` 改为：
-```cpp
-uint64_t serverExecNs = (serverExecEndTs > serverDequeuTs) ? (serverExecEndTs - serverDequeuTs) : 0;
-```
-
-### Bug 2: `offlineRpc` 场景下 `rpc2` 的 meta 不包含 `SERVER_SEND` tick
-
-**位置**: `zmq_service.cpp` L1040-1045（L1049-1061）
-
-当 `offlineRpc = true` 时，会复制一份不含 `SERVER_SEND` tick 的 `meta` 通过 `rpc2` 单独发送。如果 client 侧有逻辑依赖 reply meta 中的 `SERVER_SEND`，会读不到。
-
-**影响**: 纯数据问题，不影响当前 metrics 计算（`RecordServerLatencyMetrics` 在 move 之前调用）。
-
-### Bug 3: `GetTotalTicksTime` 假设 tick 顺序
-
-```cpp
-inline uint64_t GetTotalTicksTime(const MetaPb& meta) {
-    auto n = meta.ticks_size();
-    if (n > 1) {
-        return meta.ticks(n - 1).ts() - meta.ticks(0).ts();  // 假设 ticks[0] = CLIENT_ENQUEUE
-    }
-    return 0;
-}
-```
-
-正常流程下 `ticks[0]` 是 `CLIENT_ENQUEUE`，`ticks[n-1]` 是 `CLIENT_RECV`，但如果 reply meta 中有额外追加的 tick（如 `SERVER_EXEC_NS`），边界情况下假设可能不成立。
+合成：**[8]** `SERVER_EXEC_NS` `= Ts(5) − Ts(3)`；**[9]** `SERVER_RPC_WINDOW_NS` `= Ts(6) − Ts(3)`（均写入 **`tick.ts` 为时长**）。
 
 ---
 
-## 8. 改动文件清单
+## 6. 定界指引（口述）
 
-| 文件 | 改动类型 |
-|------|---------|
-| `zmq_constants.h` | 新增 8 个 TICK 常量 + `RecordTick`/`GetTotalTicksTime`/`GetTimeSinceEpoch` |
-| `kv_metrics.h` | 新增 7 个 MetricId（ZMQ_CLIENT_QUEUING_LATENCY ~ ZMQ_RPC_NETWORK_LATENCY） |
-| `kv_metrics.cpp` | MetricDesc 注册（单位统一为 ns） |
-| `zmq_stub_impl.h` | `RecordRpcLatencyMetrics()` 函数 + `CLIENT_ENQUEUE`/`CLIENT_RECV` 打点 |
-| `zmq_stub_conn.cpp` | `CLIENT_TO_STUB`/`CLIENT_SEND` 打点（`RouteToZmqSocket`/`SendMsg`） |
-| `zmq_service.cpp` | `SERVER_RECV`/`SERVER_DEQUEUE`/`SERVER_EXEC_END`/`SERVER_SEND` 打点 + `RecordServerLatencyMetrics()` |
+| 观测 | 可能含义 |
+|------|----------|
+| `zmq_client_queuing_latency` 高 | Client **MsgQue / prefetch → Outbound** 段堆积 |
+| `zmq_server_queue_wait_latency` 高 | 请求已到 service 但在 **worker 队列** 等待 |
+| `zmq_server_exec_latency` 高 | **业务 handler** 慢 |
+| `zmq_server_reply_latency` 高 | **`SERVER_SEND` 前**路径（队列、序列化、`ServiceToClient` 等），非单独 zmq 完成点 |
+| `zmq_rpc_e2e_latency` 高 | 端到端慢；再结合上表逐项拆 |
+| `zmq_rpc_network_latency`（残差）大 | **仅作线索**：时钟/NTP、`srvWin` 与 client 代数差；不可替代真实 RTT 仪器 |
+
+---
+
+## 7. 相关文件（实现）
+
+| 文件 | 作用 |
+|------|------|
+| `zmq_constants.h` | Tick 名、`RecordLatencyMetric`、`RecordServerLatencyMetrics`、`RecordRpcLatencyMetrics` |
+| `zmq_stub_impl.h` | `CLIENT_ENQUEUE`、合并 client ticks、`CLIENT_RECV`、`RecordRpcLatencyMetrics` |
+| `zmq_stub_conn.cpp` | `CLIENT_TO_STUB` |
+| `zmq_unary_client_impl.h` | Unary 路径与 Async 对齐的 enqueue / recv / TO_STUB 补打 |
+| `zmq_service.cpp` | `SERVER_RECV`、Worker ticks、`SERVER_SEND`、`routingFn_`、`ServiceToClient` |
+| `zmq_server_stream_base.h` | Unary **SERVER_EXEC_END** 保护与 **enableMsgQ\_** 语义 |
+| `kv_metrics.{h,cpp}` | 6 个 queue histogram 的注册与名字 |

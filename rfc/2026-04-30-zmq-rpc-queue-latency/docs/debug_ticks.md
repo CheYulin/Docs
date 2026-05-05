@@ -1,224 +1,52 @@
-# ZMQ RPC Tick Debugging Guide
+# ZMQ RPC：Tick / Metrics 核对说明
 
-## Overview
+本文仅描述 **当前代码** 中真实存在的符号；**不包含**历史上讨论过但未合入的调试 API。
 
-This document describes the tick recording and latency metrics debugging functions for ZMQ RPC.
+权威定义与公式见 **[design.md](design.md)** 与源码 **`src/datasystem/common/rpc/zmq/zmq_constants.h`**。
 
-## Generic Tick Helper Functions
+---
 
-### `DumpTicksFormatted(meta, prefix)` - Dump all ticks as single LOG(ERROR)
+## 1. Tick 名（`MetaPb.ticks[].tick_name`）
 
-Location: `zmq_constants.h`
+**Wall（`ts` = 墙钟）**
 
-```cpp
-inline void DumpTicksFormatted(const MetaPb& meta, const char* prefix = "TICK")
-```
+- `CLIENT_ENQUEUE`, `CLIENT_TO_STUB`, `CLIENT_RECV`
+- `SERVER_RECV`, `SERVER_DEQUEUE`, `SERVER_EXEC_END`, `SERVER_SEND`
 
-**Purpose**: Dump all ticks in MetaPb as a single formatted LOG(ERROR).
+**合成（`ts` = 时长 ns）**
 
-**Output Example**:
-```
-[TICK] tick_name=CLIENT_ENQUEUE | tick_name=CLIENT_STUB_SEND | tick_name=CLIENT_DEQUEUE
-```
+- `SERVER_EXEC_NS` — 由 **`RecordServerLatencyMetrics`** 追加
+- `SERVER_RPC_WINDOW_NS` — 同上
 
-**Usage**: Easy to enable/disable for debugging:
-```cpp
-DumpTicksFormatted(clientMeta, "CLIENT_LATENCY");
-```
+**不存在于当前常量的名字**（勿在文档中当作已打点）：`CLIENT_SEND`、`CLIENT_STUB_SEND`、`CLIENT_DEQUEUE`、`TICK_SERVER_ZMQ_SEND` 等。
 
-### `DumpTicks(meta, prefix)` - Dump each tick as separate LOG(ERROR)
+---
 
-```cpp
-inline void DumpTicks(const MetaPb& meta, const char* prefix = "TICK")
-```
+## 2. 核心函数（均在 `zmq_constants.h`）
 
-**Purpose**: Dump each tick as separate LOG(ERROR) line.
+| 函数 | 作用 |
+|------|------|
+| `RecordTick(MetaPb&, const char*)` | 追加 wall tick |
+| `MetaHasNamedTick` | 判断是否已有某 `tick_name` |
+| `RecordServerLatencyMetrics` | Server 侧 3 个 span + reply + 合成 [8][9] |
+| `RecordRpcLatencyMetrics` | Client 侧 queuing + e2e + network 残差 |
+| `RecordLatencyMetric` | `deltaNs` → `NsToUs` → `GetHistogram(id).Observe` |
 
-**Output Example**:
-```
-[TICK] CLIENT_ENQUEUE=1777460739013202198
-[TICK] CLIENT_STUB_SEND=1777460739013238230
-[TICK] CLIENT_DEQUEUE=1777460739018790776
-```
+---
 
-### `GetAllTicks(meta)` - Get all ticks as vector
+## 3. 日志里如何核对
 
-```cpp
-inline std::vector<TickTimestamp> GetAllTicks(const MetaPb& meta)
-```
+1. **抓一条 RPC 响应 `MetaPb`**（或客户端 merge 后的最终 `ticks`）。
+2. 按时间顺序列出 **`tick_name` + `ts`**；注意 **`SERVER_EXEC_NS` / `SERVER_RPC_WINDOW_NS` 的 `ts` 是时长**。
+3. 用 **[README.md](README.md)** 中的 **Span 表** 手算是否落在合理范围。
+4. **PerfPoint**（如 `ZMQ_NETWORK_TRANSFER_*`）与 **`zmq_rpc_network_latency`** 公式不同，不可混为一谈。
 
-**Purpose**: Iterate all ticks programmatically.
+---
 
-**Usage**:
-```cpp
-auto ticks = GetAllTicks(clientMeta);
-for (const auto& t : ticks) {
-    LOG(ERROR) << t.name << "=" << t.ts;
-}
-```
+## 4. 常见误判
 
-### `FindTick(meta, tickName)` - Find specific tick by name
-
-```cpp
-inline int64_t FindTick(const MetaPb& meta, const char* tickName)
-```
-
-**Purpose**: Find a specific tick by name, returns 0 if not found.
-
-**Usage**:
-```cpp
-int64_t enqueueTs = FindTick(meta, TICK_CLIENT_ENQUEUE);
-int64_t recvTs = FindTick(meta, TICK_CLIENT_RECV);
-```
-
-## Debug Functions
-
-### Client-Side: `RecordClientLatencyMetrics` (in `zmq_constants.h`)
-
-```cpp
-static inline void RecordClientLatencyMetrics(const MetaPb& clientMeta)
-```
-
-**Purpose**: Debug function to print all client-side ticks and calculated metrics using `LOG(ERROR)`.
-
-**Output Example**:
-```
-[CLIENT_LATENCY] CLIENT_ENQUEUE=... | CLIENT_STUB_SEND=... | CLIENT_DEQUEUE=... | CLIENT_ZMQ_SEND=... | CLIENT_RECV=...
-[CLIENT_LATENCY] CLIENT_STUB_SEND=5552546 ns
-[CLIENT_LATENCY] CLIENT_QUEUING=0 ns (MISSING if ZMQ_SEND=0)
-```
-
-**Usage**: Call after merging client ticks in `AsyncReadImpl`:
-
-```cpp
-const MetaPb &clientMeta = asyncCall->GetClientMeta();
-RecordClientLatencyMetrics(clientMeta);  // Add debug log
-```
-
-### Server-Side: `RecordServerLatencyMetrics` (in `zmq_constants.h`)
-
-```cpp
-static inline void RecordServerLatencyMetrics(MetaPb &meta)
-```
-
-**Purpose**: Debug function to print all server-side ticks and calculated metrics using `LOG(ERROR)`.
-
-**Output Example**:
-```
-[SERVER_LATENCY] SERVER_RECV=... | SERVER_DEQUEUE=... | SERVER_EXEC_END=... | SERVER_ZMQ_SEND=...
-[SERVER_LATENCY] SERVER_QUEUE_WAIT=258481 ns
-[SERVER_LATENCY] SERVER_EXEC=1904426 ns
-[SERVER_LATENCY] SERVER_REPLY=5073 ns
-[SERVER_LATENCY] SERVER_EXEC_NS=2162907 ns (total exec from recv)
-```
-
-**Usage**: Call in `ZmqServerImpl::ServiceToClient` after `zmq_msg_send`:
-
-```cpp
-RecordTick(meta, TICK_SERVER_ZMQ_SEND);
-RecordServerLatencyMetrics(meta);  // Add debug log
-PushFrontProtobufToFrames(meta, frames);
-frontend_->SendAllFrames(...);
-```
-
-## Tick Constants
-
-### Client Ticks
-
-| Constant | Definition | Location |
-|----------|------------|----------|
-| `TICK_CLIENT_ENQUEUE` | Message put into outBound queue | `zmq_stub_impl.h` L163 |
-| `TICK_CLIENT_STUB_SEND` | SendMsg returns, waiting for prefetcher | `zmq_stub_impl.h` L172 |
-| `TICK_CLIENT_DEQUEUE` | Prefetcher dequeues from queue | `zmq_msg_queue.h` L682 |
-| `TICK_CLIENT_ZMQ_SEND` | zmq_msg_send completes | ❌ MISSING (architectural) |
-| `TICK_CLIENT_RECV` | Client receives response | `zmq_stub_impl.h` L232 |
-
-### Server Ticks
-
-| Constant | Definition | Location |
-|----------|------------|----------|
-| `TICK_SERVER_RECV` | zmq_msg_recv returns | `zmq_service.cpp` L1189 |
-| `TICK_SERVER_DEQUEUE` | Dequeued from worker queue | `zmq_service.cpp` L722 |
-| `TICK_SERVER_EXEC_END` | Business handler completes | `zmq_service.cpp` L729 |
-| `TICK_SERVER_SEND` | Legacy - to be removed | `zmq_server_stream_base.h` L375 |
-| `TICK_SERVER_ZMQ_SEND` | zmq_msg_send succeeds | `zmq_server_impl.cpp` L187 |
-
-## Known Issues
-
-### 1. CLIENT_ZMQ_SEND MISSING
-
-**Problem**: `CLIENT_ZMQ_SEND` tick cannot be recorded due to architectural limitation.
-
-**Root Cause**:
-- `SendDirect` runs in prefetcher thread
-- `clientMeta` is stored in AsyncWriteImpl thread
-- Tick recorded in prefetcher cannot propagate to `clientMeta`
-
-**Impact**: `CLIENT_QUEUING` metric shows `MISSING`.
-
-**Workaround**: Use `ZMQ_CLIENT_QUEUING_LATENCY` histogram which may be populated through other paths.
-
-### 2. TICK_SERVER_SEND vs TICK_SERVER_ZMQ_SEND
-
-**Problem**: `TICK_SERVER_SEND` is still being recorded in multiple places but the semantic is wrong.
-
-**Solution**:
-- Remove `TICK_SERVER_SEND` usage from `zmq_server_stream_base.h` and `zmq_service.cpp`
-- Use only `TICK_SERVER_ZMQ_SEND` in `ZmqServerImpl::ServiceToClient`
-
-## Metric Formulas
-
-### Client Metrics
-
-| Metric | Formula | Status |
-|--------|---------|--------|
-| `CLIENT_QUEUING` | `CLIENT_ZMQ_SEND - CLIENT_ENQUEUE` | ❌ MISSING |
-| `CLIENT_STUB_SEND` | `CLIENT_DEQUEUE - CLIENT_STUB_SEND` | ✓ Working |
-
-### Server Metrics
-
-| Metric | Formula | Status |
-|--------|---------|--------|
-| `SERVER_QUEUE_WAIT` | `SERVER_DEQUEUE - SERVER_RECV` | ✓ Working |
-| `SERVER_EXEC` | `SERVER_EXEC_END - SERVER_DEQUEUE` | ✓ Working |
-| `SERVER_REPLY` | `SERVER_ZMQ_SEND - SERVER_EXEC_END` | ✓ Working |
-
-### E2E Metrics
-
-| Metric | Formula | Status |
-|--------|---------|--------|
-| `RPC_E2E` | `CLIENT_RECV - CLIENT_ENQUEUE` | ✓ Working |
-| `RPC_NETWORK` | `E2E - SERVER_EXEC` | ✓ Working |
-
-## Debugging Tips
-
-1. **Enable ERROR logs**: Pass `--logtostderr=1` to see tick logs
-2. **Filter logs**: `grep "TICK\|LATENCY" <logfile>`
-3. **Check tick sequence**: Ensure ticks are in chronological order
-4. **Verify timestamps**: All timestamps should be nanoseconds since epoch
-
-## Adding/Removing Debug Logs
-
-### Easy Toggle with `DumpTicksFormatted`
-
-To enable debug logging, simply add:
-```cpp
-DumpTicksFormatted(clientMeta, "CLIENT_LATENCY");
-```
-
-To disable, comment out or remove the line. No need to modify multiple places.
-
-### Quick Tick Iteration Example
-
-```cpp
-// Dump all ticks
-DumpTicksFormatted(meta, "DEBUG");
-
-// Find specific tick
-int64_t ts = FindTick(meta, TICK_CLIENT_ENQUEUE);
-
-// Iterate programmatically
-for (const auto& t : GetAllTicks(meta)) {
-    LOG(ERROR) << t.name << "=" << t.ts;
-}
-```
+| 现象 | 说明 |
+|------|------|
+| 期望有 `CLIENT_ZMQ_SEND` | 架构上不在 **MetaPb** 打该点；无对应 Histogram |
+| `zmq_rpc_network_latency` 与 ping 不符 | 设计为 **残差**（混合 client 钟与 server 窗口），见 `zmq_constants.h` 注释 |
+| `SERVER_EXEC_NS` "含排队" | 当前实现为 **`EXEC_END − RECV`**，不是 **`EXEC_END − DEQUEUE`** |
