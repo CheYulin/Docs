@@ -23,7 +23,7 @@ mkdir -p "${DS_OPENSOURCE_DIR}"
 cd "${REMOTE_DS}"
 bazel info release 2>/dev/null || true
 echo "=== Building ${TARGET} (jobs=${JOBS}) ==="
-bazel build "${TARGET}" --jobs="${JOBS}"
+bazel build "${TARGET}" --config=perf --config=release --jobs="${JOBS}"
 REMOTESCRIPT
 
 echo "Build done."

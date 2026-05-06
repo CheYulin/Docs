@@ -85,3 +85,4 @@
 | [design.md](design.md) | 设计与实现摘录 |
 | [debug_ticks.md](debug_ticks.md) | 核对 `MetaPb.ticks` 的注意点 |
 | [issue-rfc.md](issue-rfc.md)、[pr-description.md](pr-description.md)、[pr-description-incremental.md](pr-description-incremental.md) | **历史**；度量以本节 + **design.md** + **源码**为准 |
+| [profiling/](../profiling/README.md) | OS 层可观测工具链（perf / strace / tcp / 统一解析） |

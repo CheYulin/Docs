@@ -21,9 +21,11 @@
 #   ./repl_pipeline.sh --kv-metrics-ut --skip-sync 5   # KV enum/desc sanity before long REPL UT
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROFILING_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# scripts/ holds the ST-run helpers; profiling/ holds the profiling scripts
+SCRIPTS_DIR="$(cd "${PROFILING_DIR}/../scripts" && pwd)"
 # shellcheck source=repl_remote_common.inc.sh
-source "${SCRIPT_DIR}/repl_remote_common.inc.sh"
+source "${PROFILING_DIR}/repl_remote_common.inc.sh"
 
 SKIP_SYNC=0
 SKIP_BUILD=0
@@ -64,27 +66,27 @@ done
 echo "=== repl_pipeline: REMOTE=${REMOTE} REMOTE_DS=${REMOTE_DS} DS_OP=${DS_OPENSOURCE_DIR_REMOTE} jobs=${BAZEL_JOBS} duration=${DURATION}s ==="
 
 if [[ "${SKIP_SYNC}" -eq 0 ]]; then
-  bash "${SCRIPT_DIR}/rsync_datasystem.sh"
+  bash "${SCRIPTS_DIR}/rsync_datasystem.sh"
 else
   echo "=== skipping rsync (--skip-sync) ==="
 fi
 
 if [[ "${SKIP_BUILD}" -eq 0 ]]; then
-  bash "${SCRIPT_DIR}/bazel_build.sh"
+  bash "${SCRIPTS_DIR}/bazel_build.sh"
 else
   echo "=== skipping bazel build (--skip-build) ==="
 fi
 
 if [[ "${KV_METRICS_UT}" -eq 1 ]]; then
   echo "=== remote KV metrics URMA-tail layout UT (after build, before repl bazel_run) ==="
-  bash "${SCRIPT_DIR}/bazel_run_kv_metric_urma_layout_ut.sh"
+  bash "${SCRIPTS_DIR}/bazel_run_kv_metric_urma_layout_ut.sh"
 fi
 
 if [[ "${SKIP_RUN}" -eq 0 ]]; then
   if [[ "${RUN_TEE}" -eq 1 ]]; then
-    bash "${SCRIPT_DIR}/bazel_run.sh" --tee "${DURATION}"
+    bash "${SCRIPTS_DIR}/bazel_run.sh" --tee "${DURATION}"
   else
-    bash "${SCRIPT_DIR}/bazel_run.sh" "${DURATION}"
+    bash "${SCRIPTS_DIR}/bazel_run.sh" "${DURATION}"
   fi
 else
   echo "=== skipping bazel run (--skip-run) ==="
@@ -94,7 +96,7 @@ LOGFILE="${LOCAL_RESULTS_DIR}/${REPL_LOG_NAME}"
 if [[ "${SKIP_PARSE}" -eq 0 ]] && [[ -f "${LOGFILE}" ]]; then
   echo
   echo "=== parse_repl_log.py ==="
-  python3 "${SCRIPT_DIR}/parse_repl_log.py" "${LOGFILE}"
+  python3 "${SCRIPTS_DIR}/parse_repl_log.py" "${LOGFILE}"
 else
   if [[ "${SKIP_PARSE}" -ne 0 ]]; then
     echo "=== skipping parse (--skip-parse) ==="

@@ -2,6 +2,8 @@
 
 本目录是 **ZMQ RPC queue latency ST（gtest）** 在远端 `xqyun-32c32g` 上 **rsync → bazel build → bazel test → 本地 parse** 的**唯一推荐入口**，避免各会话各写一套 ssh/bazel 命令导致 **third-party 缓存不一致** 或 **并行度不一致**。
 
+> **OS 层 Profiling**：见 [README.md](./README.md)（perf / strace / tcp / 统一解析），推荐入口 `build_profiling_pipeline.sh`。
+
 ### 脚本一览
 
 | 脚本 | 作用 |
@@ -9,8 +11,14 @@
 | `repl_remote_common.inc.sh` | **仅被 source**：统一 `LOCAL_DS`、`REMOTE`、`REMOTE_DS`、`DS_OPENSOURCE_DIR_REMOTE`、`BAZEL_JOBS`、bazel target、日志路径（不要单独执行） |
 | `repl_pipeline.sh` | **推荐一键**：按顺序调用下面三步 + `parse_repl_log.py`；可加 **`--kv-metrics-ut`**：在远端 `bazel build` 之后、长耗时的 REPL `bazel test` 之前跑一次 **`MetricsTest.kv_metric_urma_id_layout_test`** |
 | `rsync_datasystem.sh` | 将本地 `yuanrong-datasystem` 同步到远端 `REMOTE_DS`（`--delete`，排除项见 `${AGENT_WORKBENCH_ROOT}/scripts/build/remote_build_run_datasystem.rsyncignore`） |
-| `bazel_build.sh` | 远端 `bazel build`：`//tests/st/common/rpc/zmq:zmq_rpc_queue_latency_repl` |
+| `bazel_build.sh` | 远端 `bazel build`：`//tests/st/common/rpc/zmq:zmq_rpc_queue_latency_repl`，`--config=perf --config=release` |
 | `bazel_run.sh` | 默认：远端 **`bazel test`**（`ds_cc_test`），`--test_env=ZMQ_RPC_QUEUE_LATENCY_SEC=<秒>`（位置参数默认 5），stdout/stderr 重定向 **`REMOTE_REPL_LOG_PATH`** 后 **`scp` 回本机** `results/zmq_rpc_queue_latency_repl.log`。盯屏：**`./bazel_run.sh --tee [秒]`**。 |
+| `build_profiling_pipeline.sh` | **推荐入口**：rsync → `build.sh -b bazel -r -p on -t build` → tcp_profile → syscall_profile → perf_profile → repl_pipeline → parse；`--skip-*` 可跳步骤 |
+| `run_profiling_pipeline.sh` | 纯 profiling（复用已有 build）：tcp + strace + perf + repl + parse |
+| `perf_profile.sh` | `perf stat -a`（1s 间隔 hw counters）+ `perf record -F 99 -a -g`（系统级火焰图采样） |
+| `tcp_profile.sh` | 采样 `/proc/net/snmp`、`/proc/net/netstat`、`ss -ti`（TCP 重传、RTT、socket 缓冲） |
+| `syscall_profile.sh` | `strace -c` 系统调用时间与次数分布（**需要远端 `dnf install -y strace`**） |
+| `parse_profiling.py` | 统一解析 tcp / strace / perf stat / perf record / REPL JSON metrics，输出结构化摘要 |
 | `bazel_run_kv_metric_urma_layout_ut.sh` | 远端 **仅 UT**：**`//tests/ut/common/metrics:metrics_test`** + **`--test_filter=MetricsTest.kv_metric_urma_id_layout_test`**，`--define=enable_urma=false`（依赖已 `rsync`/build）；**`repl_pipeline.sh --kv-metrics-ut`** 会调用 |
 | `parse_repl_log.py` | 从上述 log 中提取 metrics_summary / queue-flow histogram（**本地运行**） |
 
