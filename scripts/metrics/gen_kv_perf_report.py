@@ -417,6 +417,11 @@ def snapshots_max_delta_per_path(paths: List[str]) -> List[MetricsSnapshot]:
     return [snapshot_from_obj(h, o) for h, o in summary_pairs_max_delta_per_path(paths)]
 
 
+def collect_all_snapshots_for_paths(paths: List[str]) -> List[MetricsSnapshot]:
+    """返回所有 metrics_summary 行（按文件顺序拼接），不丢弃任何 cycle。"""
+    return [snapshot_from_obj(h, o) for h, o in collect_summary_pairs(paths, last_only=False)]
+
+
 def format_histogram_total(item: dict, *, bucket: HistBucket = "total") -> str:
     t = item.get(bucket)
     if isinstance(t, dict):
@@ -431,7 +436,8 @@ def format_histogram_total(item: dict, *, bucket: HistBucket = "total") -> str:
 
 def _hist_parts(
     by_name: Dict[str, Any], key: str, *, bucket: HistBucket = "total"
-) -> Optional[Tuple[int, int, int]]:
+) -> Optional[Tuple[int, int, int, int, int, int]]:
+    """Return (count, avg_us, max_us, p50, p90, p99) or None if unavailable."""
     it = by_name.get(key)
     if not it:
         return None
@@ -443,7 +449,10 @@ def _hist_parts(
     m = t.get("max_us")
     if not isinstance(c, int) or not isinstance(a, (int, float)) or not isinstance(m, (int, float)):
         return None
-    return int(c), int(a), int(m)
+    p50 = t.get("p50", 0)
+    p90 = t.get("p90", 0)
+    p99 = t.get("p99", 0)
+    return int(c), int(a), int(m), int(p50), int(p90), int(p99)
 
 
 def _fmt_hist_line(
@@ -456,9 +465,9 @@ def _fmt_hist_line(
     p = _hist_parts(by_name, key, bucket=bucket)
     if not p:
         return None
-    c, a, m = p
+    c, a, m, p50, p90, p99 = p
     unit = "ns" if ns else "µs"
-    return f"{key}  n={c}  avg={a}{unit}  max={m}{unit}"
+    return f"{key}  n={c}  avg={a}{unit}  max={m}{unit}  p50={p50}{unit}  p90={p90}{unit}  p99={p99}{unit}"
 
 
 def _fmt_scalar_line(
@@ -918,6 +927,16 @@ def render_report(
     return "".join(parts)
 
 
+def _hist_p99(by_name: Dict[str, Any], name: str, bucket: HistBucket) -> str:
+    it = by_name.get(name)
+    if not it:
+        return "-"
+    t = it.get(bucket)
+    if isinstance(t, dict) and "p99" in t:
+        return str(t["p99"])
+    return "-"
+
+
 def render_table_row(
     source: str,
     snap: MetricsSnapshot,
@@ -941,6 +960,24 @@ def render_table_row(
         avg("worker_rpc_get_remote_object_latency"),
         avg("worker_rpc_remote_get_outbound_latency"),
         avg("worker_urma_wait_latency"),
+    ]
+    return "| " + " | ".join(str(c) for c in cols) + f" | `{source}` |"
+
+
+def render_table_row_p99(
+    source: str,
+    snap: MetricsSnapshot,
+    *,
+    hist_bucket: HistBucket = "total",
+) -> str:
+    cols = [
+        snap.cycle,
+        _hist_p99(snap.by_name, "client_rpc_get_latency", hist_bucket),
+        _hist_p99(snap.by_name, "worker_process_get_latency", hist_bucket),
+        _hist_p99(snap.by_name, "worker_rpc_query_meta_latency", hist_bucket),
+        _hist_p99(snap.by_name, "worker_rpc_get_remote_object_latency", hist_bucket),
+        _hist_p99(snap.by_name, "worker_rpc_remote_get_outbound_latency", hist_bucket),
+        _hist_p99(snap.by_name, "worker_urma_wait_latency", hist_bucket),
     ]
     return "| " + " | ".join(str(c) for c in cols) + f" | `{source}` |"
 
@@ -1040,6 +1077,66 @@ def _table_report_text(
     return "\n".join(table_lines) + "\n"
 
 
+def _table_report_text_p99(
+    snapshots: List[MetricsSnapshot], hist_bucket: HistBucket
+) -> str:
+    table_lines = [
+        "| cycle | client_rpc_get_p99_µs | worker_process_get_p99_µs | query_meta_p99_µs | "
+        "get_remote_obj_p99_µs | remote_out_p99_µs | urma_wait_p99_µs | source |",
+        "|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for snap in snapshots:
+        table_lines.append(
+            render_table_row_p99(
+                snap.source_line_hint, snap, hist_bucket=hist_bucket
+            )
+        )
+    return "\n".join(table_lines) + "\n"
+
+
+def _ts_hist(
+    snap: MetricsSnapshot, name: str, bucket: HistBucket
+) -> Tuple[str, str, str, str]:
+    """Return (count, avg_us, p99_us, max_us) for a histogram metric."""
+    it = snap.by_name.get(name)
+    if not it:
+        return ("-", "-", "-", "-")
+    t = it.get(bucket)
+    if not isinstance(t, dict):
+        return ("-", "-", "-", "-")
+    c = str(t.get("count", "-"))
+    a = str(t.get("avg_us", "-"))
+    p = str(t.get("p99", "-"))
+    m = str(t.get("max_us", "-"))
+    return (c, a, p, m)
+
+
+def _time_series_table(
+    snapshots: List[MetricsSnapshot], hist_bucket: HistBucket
+) -> str:
+    """Compact table: cycle, key metrics p99+max (with count), source for all cycles."""
+    lines = [
+        "| cycle | e2e_p99_µs | e2e_max_µs | net_p99_µs | net_max_µs | "
+        "exec_p99_µs | exec_max_µs | zmq_send_p99_µs | zmq_send_max_µs | "
+        "zmq_recv_p99_µs | zmq_recv_max_µs | part | source |",
+        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|",
+    ]
+    for snap in snapshots:
+        e2e_c, e2e_a, e2e_p, e2e_m = _ts_hist(snap, "zmq_rpc_e2e_latency", hist_bucket)
+        net_c, net_a, net_p, net_m = _ts_hist(snap, "zmq_rpc_network_latency", hist_bucket)
+        exec_c, exec_a, exec_p, exec_m = _ts_hist(snap, "zmq_server_exec_latency", hist_bucket)
+        send_c, send_a, send_p, send_m = _ts_hist(snap, "zmq_send_io_latency", hist_bucket)
+        recv_c, recv_a, recv_p, recv_m = _ts_hist(snap, "zmq_receive_io_latency", hist_bucket)
+        part = f"{snap.part_index}/{snap.part_count}" if snap.part_index and snap.part_count else "-"
+        src = snap.source_line_hint
+        lines.append(
+            f"| {snap.cycle} | {e2e_p} | {e2e_m} | {net_p} | {net_m} | "
+            f"{exec_p} | {exec_m} | {send_p} | {send_m} | {recv_p} | {recv_m} | "
+            f"{part} | `{src}` |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Generate KV perf Markdown report from metrics_summary logs.")
     ap.add_argument(
@@ -1078,6 +1175,17 @@ def main() -> int:
         "--table",
         action="store_true",
         help="Print a compact markdown table of key avgs for every snapshot",
+    )
+    ap.add_argument(
+        "--table-p99",
+        action="store_true",
+        help="Print a compact markdown table of key p99 latency for every snapshot",
+    )
+    ap.add_argument(
+        "--time-series",
+        action="store_true",
+        help="Print a time-series table across ALL cycles (not just last); "
+        "shows e2e/network/exec/send recv p99+max per snapshot",
     )
     ap.add_argument(
         "--ascii-tree",
@@ -1140,6 +1248,19 @@ def main() -> int:
             _write_output(_table_report_text(snapshots_delta, "delta"), path_delta)
             return 0
 
+        if args.table_p99:
+            _write_output(_table_report_text_p99(snapshots_total, "total"), path_total)
+            _write_output(_table_report_text_p99(snapshots_delta, "delta"), path_delta)
+            return 0
+
+        if args.time_series:
+            all_snaps = collect_all_snapshots_for_paths(args.logs)
+            if not all_snaps:
+                print("No metrics_summary found.", file=sys.stderr)
+                return 1
+            _write_output(_time_series_table(all_snaps, "total"), path_total)
+            return 0
+
         _write_output(
             _compact_markdown_report(
                 snapshots_total, bench, perf_paths, perf_keys, "total"
@@ -1166,6 +1287,18 @@ def main() -> int:
             _table_report_text(snapshots_total, "total"),
             args.output,
         )
+        return 0
+
+    if args.table_p99:
+        _write_output(_table_report_text_p99(snapshots_total, "total"), args.output)
+        return 0
+
+    if args.time_series:
+        all_snaps = collect_all_snapshots_for_paths(args.logs)
+        if not all_snaps:
+            print("No metrics_summary found.", file=sys.stderr)
+            return 1
+        _write_output(_time_series_table(all_snaps, "total"), args.output)
         return 0
 
     _write_output(
