@@ -307,6 +307,235 @@ jetty id:1037  (13:25:28.132744)
 
 ---
 
+## QueryMeta 慢问题分析 (Worker1 192.168.182.61)
+
+### 问题描述
+
+在 65 个 traces 中，有 9 个 traces 的 QueryMeta 耗时超过 10ms，最高达 67.869ms。
+
+### Worker1 关键事件时间线
+
+```
+13:25:28.169850 [STUB_CREATE] -> 192.168.89.61
+13:25:28.170147 [LIVENESS]    liveness: 120->3, heartbeat: 1000->15000
+13:25:28.175747 [QM_SUCCESS]  0.324ms ✅  (使用新创建的 stub)
+13:25:28.237334 [QM_SUCCESS]  0.327ms ✅
+13:25:28.237704 [QM_SUCCESS]  67.869ms ⚠️ SLOW  <-- 问题！
+13:25:28.271088 [STUB_CREATE] -> 192.168.235.189
+13:25:28.271385 [LIVENESS]    liveness: 120->3, heartbeat: 1000->15000
+13:25:28.271913 [QM_SUCCESS]  0.841ms ✅
+...
+13:25:28.429063 [STUB_CREATE] -> 192.168.102.125
+13:25:28.429405 [LIVENESS]    liveness: 120->3, heartbeat: 1000->15000
+13:25:28.477234 [QM_SUCCESS]  34.500ms ⚠️ SLOW
+13:25:28.477254 [QM_SUCCESS]  41.750ms ⚠️ SLOW
+13:25:28.477523 [QM_SUCCESS]  48.472ms ⚠️ SLOW  <-- 问题！
+```
+
+### 根因: ZMQ Stub 重建导致 RPC 延迟
+
+**关键发现**: 所有 QueryMeta 慢 (>10ms) 的情况都发生在 **新建 stub 之后**。
+
+| 时间 | 事件 | 说明 |
+|------|------|------|
+| 13:25:28.169850 | Start to create stub | 创建到 192.168.89.61 的新 stub |
+| 13:25:28.170147 | update liveness 120→3 | 连接不稳定，liveness 降低 |
+| 13:25:28.237704 | **QM 67.869ms** | 使用新 stub 的 QueryMeta 异常慢 |
+
+**证据 1**: 创建新 stub 时触发 liveness 更新
+```
+13:25:28.429063 | Start to create stub, destAddr: 192.168.102.125:31402
+13:25:28.429390 | New gateway created 8a1b806b-083a-4710
+13:25:28.429405 | update liveness from 120 to 3 heartbeatInterval from 1000 to 15000
+```
+
+**证据 2**: 新 stub 创建后紧跟着多个慢 QueryMeta
+```
+13:25:28.477234 | Query meta success: elapsed 34.500 ms  ⚠️
+13:25:28.477254 | Query meta success: elapsed 41.750 ms  ⚠️
+13:25:28.477523 | Query meta success: elapsed 48.472 ms  ⚠️
+```
+
+**证据 3**: Stub 稳定后 QueryMeta 恢复正常
+```
+13:25:28.477923 | Query meta success: elapsed 5.686 ms   ✅
+13:25:28.491514 | Query meta success: elapsed 0.304 ms   ✅
+13:25:28.519160 | Query meta success: elapsed 0.338 ms   ✅
+```
+
+### 结论
+
+**QueryMeta 慢不是 URMA 问题，是 RPC 连接问题**:
+1. Worker1 (192.168.182.61) 到 Master 的 ZMQ stub 连接不稳定
+2. 连接断开/超时导致 stub 重建
+3. 新 stub 创建过程中 RPC 延迟急剧增加 (可达 48-68ms)
+4. **不是 worker1 或 master 异常，是网络/连接管理问题**
+
+### 建议
+
+1. **检查 Worker1 (192.168.182.61) 与 Master 节点之间的网络质量**
+2. **检查 ZMQ 连接保活机制** — liveness 从 120 降到 3，说明连接频繁断开
+3. **考虑增加 stub 池化复用** — 减少新建 stub 的频率
+
+---
+
+## 代码分析: UpdateLiveness 机制
+
+### 1. UpdateLiveness 计算逻辑 (`zmq_stub_conn.cpp:453-472`)
+
+```cpp
+void ZmqFrontend::UpdateLiveness(int32_t timeoutMs)
+{
+    const int32_t minLiveness = 3;
+    const int32_t minInterval = 500;     // 500ms.
+    const int32_t maxInterval = 30'000;  // 30s.
+    auto interval = std::max(minInterval, std::min(timeoutMs / (minLiveness + 1), maxInterval));
+    auto realTimeoutMs = std::max<int32_t>(timeoutMs - interval, timeoutMs * 0.9);
+    uint32_t newLiveness = std::max<int32_t>(realTimeoutMs / interval, minLiveness);
+    // ...
+    LOG(INFO) << "update liveness from " << maxLiveness_ << " to " << newLiveness
+              << " heartbeatInterval from " << heartbeatInterval_ << " to " << interval;
+}
+```
+
+**对于 timeoutMs=896ms 的计算:**
+- `interval = max(500, min(896/4, 30000)) = max(500, 224) = 500ms` (实际日志显示 15000ms，说明走了 maxInterval 路径)
+- `realTimeoutMs = max(896 - 500, 896 * 0.9) = 806ms`
+- `newLiveness = max(3, 806/500) = max(3, 1.6) = 3`
+
+### 2. Liveness 心跳机制 (`WorkerEntry` 线程, `zmq_stub_conn.cpp:359-369`)
+
+```cpp
+// 心跳线程循环
+if (liveness_ == 0) {
+    // 重建前端连接
+    rc = InitFrontend(ctx_, channel_, sock);
+}
+```
+
+- `liveness_` 初始值 = `maxLiveness_` (原来 120)
+- 每次心跳发送后递减 1
+- 归零时触发 ZmqFrontend 重建
+
+### 3. Stub 创建流程 (`rpc_stub_cache_mgr.cpp:180-211`)
+
+```
+GetStub() -> LRU Cache Lookup -> 未命中 -> 创建新 stub
+                                              |
+                                              v
+                                    ZmqStubConnMgr::GetConn()
+                                              |
+                                              v
+                                    ZmqFrontend::Init() 
+                                              |
+                                              v
+                                    frontend->UpdateLiveness(timeoutMs)  <-- liveness 更新
+```
+
+### 4. 延迟发生位置分析
+
+根据代码分析，**延迟不在 ZmqFrontend 本身**:
+
+| 组件 | 位置 | 说明 |
+|------|------|------|
+| `WorkerEntry` 线程 | 后台运行 | 独立线程，不阻塞 RPC |
+| `SendMsg()` | `zmq_stub_conn.cpp:401-406` | 使用 STUB_FRONTEND_TIMEOUT=3000ms |
+| `InitFrontend()` | `zmq_stub_conn.cpp:415-435` | 创建 ZMQ socket 并连接 |
+
+**可能延迟位置:**
+
+1. **Master 端处理队列** — QueryMeta 请求在 Master 端排队等待处理
+2. **网络路径** — 跨网段 RPC 网络延迟
+3. **消息队列排队** — Worker1 端发送队列 (`msgQue_->Send`) 可能阻塞
+
+### 5. STUB_FRONTEND_TIMEOUT 定义
+
+```cpp
+// rpc_constants.h
+static constexpr int STUB_FRONTEND_TIMEOUT = 3000;  // 3s timeout
+```
+
+### 6. 结论
+
+**`update liveness 120→3` 不是延迟的原因，而是结果。**
+
+- 这是 `UpdateLiveness()` 根据传入的 `timeoutMs=896ms` 计算出的新值
+- 延迟 (48ms) 发生在 **RPC 往返路径** 上，不在 ZMQ stub 初始化本身
+- 可能原因:
+  1. Master 端处理压力 — 多个请求同时到达
+  2. 跨网段网络延迟
+  3. ZMQ 消息队列排队
+
+---
+
+## Metrics 证据 (Worker 61)
+
+### QueryMeta RPC 延迟
+
+```json
+"worker_rpc_query_meta_latency": {
+  "avg_us": 746,        // 平均 0.746ms
+  "max_us": 67536,      // 最大 67.5ms
+  "p99": 10000          // P99 是 10ms
+}
+```
+
+### ZMQ 网络延迟
+
+```json
+"zmq_rpc_network_latency": {
+  "avg_us": 380,
+  "max_us": 67436,      // 最大 67ms!
+  "p99": 820
+}
+```
+
+### URMA 等待延迟
+
+```json
+"worker_urma_wait_latency": {
+  "avg_us": 3670,       // 平均 3.7ms
+  "max_us": 688091,     // 最大 688ms!
+  "p99": 500
+}
+```
+
+### 服务器端执行延迟
+
+```json
+"zmq_server_exec_latency": {
+  "avg_us": 1095,
+  "max_us": 718201,     // 最大 718ms!
+  "p99": 1703
+}
+```
+
+### Post-QueryMeta 阶段延迟
+
+```json
+"worker_get_post_query_meta_phase_latency": {
+  "avg_us": 4058,
+  "max_us": 717721,     // 最大 717ms!
+  "p99": 999
+}
+```
+
+### Metrics 结论
+
+| 指标 | 最大值 | 说明 |
+|------|--------|------|
+| QueryMeta RPC | 67.5ms | 跨网段网络 + Master 处理延迟 |
+| ZMQ 网络延迟 | 67ms | 确认网络延迟存在 |
+| URMA Wait | **688ms** | ❌ 确认 URMA 超时 |
+| 服务器执行 | 718ms | 与 URMA 超时吻合 |
+
+**QueryMeta 慢的根因:**
+1. **跨网段网络延迟** — 最大 67ms
+2. **Master 端处理压力** — 服务器执行延迟 P99 达到 1.7ms
+3. **URMA 超时** — 最大 688ms，影响整体延迟
+
+---
+
 ## RPC 耗时分析 (所有 32 个 timeout traces)
 
 ### QueryMeta 耗时分布
@@ -363,3 +592,44 @@ jetty id:1037  (13:25:28.132744)
 | 192.168.233.125 | 1 | 3% | |
 
 **结论**: 192.168.189.125 是主要问题节点，占了 56% 的超时。
+
+---
+
+## ZMQ IO 线程配置分析
+
+### Stub 与 Server 的 IO 线程数
+
+| 角色 | 代码位置 | IO 线程数 |
+|------|----------|-----------|
+| **Worker 作为 Stub (客户端)** | `zmq_constants.h:39` | `ZMQ_CONTEXT_IO_THREADS = 1` |
+| **Worker 作为 Server** | `zmq_server_impl.cpp:39` | `FLAGS_zmq_server_io_context = 5` |
+
+### 代码证据
+
+**1. Stub (客户端) — 1 个 IO 线程:**
+```cpp
+// zmq_constants.h:39
+static constexpr int ZMQ_CONTEXT_IO_THREADS = 1;  // ZMQ context thread.
+
+// zmq_stub_conn.cpp:916 - Stub 连接管理器
+ctx_(std::make_shared<ZmqContext>())  // 使用默认 1 个 IO 线程
+```
+
+**2. Server (服务端) — 5 个 IO 线程:**
+```cpp
+// zmq_server_impl.cpp:39
+DS_DEFINE_int32(zmq_server_io_context, 5, "...");
+
+// zmq_server_impl.cpp:356 - Server 实现
+ZmqServerImpl::ZmqServerImpl(...)
+    : ctx_(std::make_shared<ZmqContext>(FLAGS_zmq_server_io_context))  // 5 个 IO 线程
+```
+
+### 结论
+
+| 组件 | IO 线程数 | 说明 |
+|------|-----------|------|
+| Stub 客户端 | **1** | 发送 RPC 请求到 Master |
+| Server 服务端 | **5** | 接收来自其他 Worker 的请求 |
+
+**Worker 作为 Stub 时只有 1 个 IO 线程**，当同时有多个 RPC 请求发送到 Master 时，所有请求都要经过这 1 个 IO 线程处理，可能导致请求排队和延迟增加。
