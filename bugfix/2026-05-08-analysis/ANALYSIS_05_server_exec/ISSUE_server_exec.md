@@ -1,183 +1,218 @@
-# Issue: Server Exec 服务器执行延迟分析 (1527us - 3685us)
+# Issue: Worker2 服务端执行延迟分析 (1428us - 3206us)
 
 ## 问题分类
 
 | 分类 | 值 |
 |------|-----|
-| **问题类型** | 性能分析 (Performance Analysis) |
-| **影响组件** | Worker Service |
-| **影响节点** | 192.168.168.216, 192.168.42.114, 192.168.219.66 |
+| **问题类型** | 性能异常 (Performance Anomaly) |
+| **影响组件** | Worker2 服务端执行 |
+| **影响节点** | Worker2 (192.168.42.114) |
 | **严重程度** | Medium |
-| **Trace ID** | metrics_server_exec_us_min_1527_max_3685 |
+| **Trace ID** | metrics_server_exec_us_min_1428_max_3206 |
 
 ---
 
-## 一、现象描述
+## 一、正确的系统流程
 
-Server Exec 延迟范围 **1.5ms - 3.7ms**，包含对象读取、内存操作等。
+### 节点角色
 
-**关键现象**：
-1. server_exec 范围: 1.5ms - 3.7ms
-2. 某些 traces server_exec 占比高达 51.7%
-3. URMA wait 时间波动大 (1.6ms - 3.6ms)
-4. 与 eviction 操作相关
-
----
-
-## 二、日志证据
-
-### Trace: 0d34feb8 (server_exec: 3654us - 最高)
+- **Worker1 (192.168.102.88)**: RPC Client
+- **Worker2 (192.168.42.114)**: RPC Server，执行方
+- **Master (192.168.215.24)**: 元数据服务
 
 ```
-[ZMQ_RPC_FRAMEWORK_SLOW] trace_id=0d34feb8
-framework_us=3442
-server_req_queue_us=109
-server_exec_us=3654 (51.7%)  <-- 高
-server_rsp_queue_us=85
-network_residual_us=3218
-
-Worker 192.168.168.216 -> Worker 192.168.219.66
-Object: kv_test_24_14_119472993788120_0, size: 8388608
-DS_POSIX_GET | 7525 | 8388608
-```
-
-**URMA Wait**:
-```
-[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr
-cost 3.57336ms, request id:972970
-status: code: [OK], urma_inflight_wr_count: 2
-```
-
-### Trace: 1051ba83 (server_exec: 1790us)
-
-```
-[ZMQ_RPC_FRAMEWORK_SLOW] trace_id=1051ba83
-framework_us=3463
-server_req_queue_us=3068 (55.5%)  <-- 高
-server_exec_us=1790
-server_rsp_queue_us=146
-network_residual_us=215
-
-EvictionList size before evict: 1226
-```
-
-### Trace: 3ec5259c (server_exec: 1658us)
-
-```
-threadPool: idle(12), total(17), wait(0)
-EvictionList size after evict: 1218, failed size: 1218
+┌─────────────┐     ┌─────────────┐     ┌─────────┐
+│ Worker1    │────>│ Worker2    │────>│ Master  │
+│ 102.88     │     │ 42.114     │     │ 215.24  │
+│ (RPC Client)│     │(RPC Server) │     │         │
+└─────────────┘     │ server_exec│     └─────────┘
+                    │ (1428-3206us)│
+                    └─────────────┘
 ```
 
 ---
 
-## 三、延迟分解
+## 二、Trace 分析
 
-### 0d34feb8 分解
-
-```
-server_exec = 3654us
-  ├── Object read from storage: ~500us (估算)
-  ├── Memory copy: ~1000us (8MB)
-  ├── URMA wait: 3573us (主要)
-  └── Other: ~581us
-```
-
-### 1051ba83 分解
+### Framework 分解
 
 ```
-server_exec = 1790us
-  ├── Eviction processing: ~1000us
-  ├── Object lookup: ~500us
-  └── Other: ~290us
+framework_us=82658
+  client_req_framework_us=49        // Worker1 准备请求
+  remote_processing_us=82639
+    server_req_queue_us=65          // Worker2 请求排队
+    server_exec_us=1428            // Worker2 执行 (异常!)
+    server_rsp_queue_us=21        // Worker1 响应排队
+    network_residual_us=82509      // URMA 传输
+  client_rsp_framework_us=12        // Worker1 接收响应
+```
+
+### 延迟分布
+
+```
+总 E2E: 82.7ms
+
+Worker2 侧:
+- server_req_q: 65us (0.08%)
+- server_exec: 1428us (1.7%)  <-- 这个 trace 较高
+- 小计: 1493us (1.8%)
+
+网络传输:
+- network_residual: 82509us (99.8%)  <-- 主导!
 ```
 
 ---
 
-## 四、根因分析
+## 三、根因分析
 
-### 4.1 URMA Wait 高延迟
+### 3.1 server_exec 组成
 
-Trace 0d34feb8 显示 URMA wait 长达 **3.57ms**：
+server_exec 是 Worker2 处理请求的时间，包括：
+1. **读取请求**: 解析 protobuf
+2. **查询本地缓存**: 检查对象是否在本地
+3. **读取数据**: 从内存/磁盘读取对象数据
+4. **写 URMA**: 发起 URMA 写操作
 
+### 3.2 代码确认
+
+**文件**: `worker_worker_oc_service_impl.cpp:134-168`
+
+```cpp
+Status WorkerWorkerOCServiceImpl::GetObjectRemote(
+    std::shared_ptr<::datasystem::ServerUnaryWriterReader<GetObjectRemoteRspPb, GetObjectRemoteReqPb>> serverApi)
+{
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
+    PerfPoint point(PerfKey::WORKER_SERVER_GET_REMOTE);
+    GetObjectRemoteReqPb req;
+    GetObjectRspPb rsp;
+    std::vector<RpcMessage> payload;
+
+    PerfPoint pointImpl(PerfKey::WORKER_SERVER_GET_REMOTE_READ);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Read(req), "GetObjectRemote read error");
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_IMPL);
+
+    // K_OC_REMOTE_GET_NOT_ENOUGH error happens only when URMA is used for RDMA
+    RETURN_IF_NOT_OK(CheckConnectionStable(req));
+    RETURN_IF_NOT_OK_EXCEPT(GetObjectRemote(req, rsp, payload), StatusCode::K_OC_REMOTE_GET_NOT_ENOUGH);
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_WRITE);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->Write(rsp), "GetObjectRemote write error");
+    pointImpl.RecordAndReset(PerfKey::WORKER_SERVER_GET_REMOTE_SENDPAYLOAD);
+
+    if (rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED
+        || rsp.data_source() == DataTransferSource::DATA_DELAY_TRANSFER
+        || rsp.data_source() == DataTransferSource::DATA_ALREADY_TRANSFERRED_MEMSET_META) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload({}, FLAGS_oc_worker_worker_direct_port > 0),
+                                         "GetObjectRemote send payload error");
+    } else if (rsp.data_source() == DataTransferSource::DATA_IN_PAYLOAD) {
+        RETURN_IF_NOT_OK_PRINT_ERROR_MSG(serverApi->SendAndTagPayload(payload, FLAGS_oc_worker_worker_direct_port > 0),
+                                         "GetObjectRemote send payload error");
+    }
+
+    pointImpl.Record();
+    return Status::OK();
+}
 ```
-[URMA_ELAPSED_TOTAL]: Waiting URMA jfc event done after urma_post_jetty_send_wr
-cost 3.57336ms
-suggest: check URMA_ELAPSED_THREAD_SHED/URMA_ELAPSED_POLL_JFC/URMA_ELAPSED_NOTIFY
+
+### 3.3 GetObjectRemoteHandler
+
+**文件**: `worker_worker_oc_service_impl.cpp:170-182`
+
+```cpp
+Status WorkerWorkerOCServiceImpl::GetObjectRemote(GetObjectRemoteReqPb &req, GetObjectRemoteRspPb &rsp,
+                                                  std::vector<RpcMessage> &payload)
+{
+    METRIC_TIMER(metrics::KvMetricId::WORKER_RPC_REMOTE_GET_INBOUND_LATENCY);
+    RETURN_IF_NOT_OK_PRINT_ERROR_MSG(akSkManager_->VerifySignatureAndTimestamp(req), "AK/SK failed.");
+    const std::string callerAddress = GetRemoteAddressForLog(req);
+    LOG(INFO) << AppendSrcDstForLog(FormatString("Processing pull object[%s] offset[%ld] size[%ld]",
+                                                 req.object_key(),
+                                                 req.read_offset(), req.read_size()),
+                                    callerAddress, FLAGS_worker_address);
+    std::vector<uint64_t> eventKeys;
+    RETURN_IF_NOT_OK(GetObjectRemoteHandler(req, rsp, payload, true, eventKeys));
+    return Status::OK();
+}
 ```
-
-**可能原因**：
-1. RDMA Completion Queue 等待
-2. CPU 调度延迟
-3. 内存带宽瓶颈
-
-### 4.2 Eviction 影响
-
-Trace 1051ba83 和 3ec5259c 显示大量 eviction 操作：
-
-```
-EvictionList size before evict: 1226
-EvictionList size after evict: 1218
-failed size: 1218  <-- 所有 eviction 都失败了
-```
-
-Eviction 失败意味着需要从存储读取，而不是从缓存。
-
-### 4.3 Thread Pool 状态
-
-```
-0d34feb8: threadPool: idle(18), total(20), wait(0)
-1051ba83: threadPool: idle(12), total(17), wait(0)
-3ec5259c: threadPool: idle(12), total(17), wait(0)
-```
-
-线程池资源充足，但请求仍需排队。
 
 ---
 
-## 五、结论
+## 四、结论
 
 | 问题 | 答案 |
 |------|------|
-| server_exec 延迟？ | **1.5ms - 3.7ms** |
-| 主要瓶颈？ | **URMA wait 和 eviction 处理** |
-| 高 exec 原因？ | 等待 RDMA 完成事件 |
-| 异常？ | URMA wait 3.5ms 偏高 |
+| server_exec 是什么？ | Worker2 执行请求的时间 |
+| 延迟多少？ | **1428us - 3206us** |
+| 正常值？ | 应该 < 1000us |
+| 根因？ | 数据读取或 URMA 准备开销 |
 
-**根因**：Server exec 高延迟主要由 URMA wait 事件等待和 eviction 处理导致。
-
----
-
-## 六、建议
-
-1. **URMA 性能调优** (P0)
-   ```
-   - 检查 RDMA CQ 大小配置
-   - 考虑 interrupt vs polling 模式
-   - 监控 urma_inflight_wr_count
-   ```
-
-2. **Eviction 优化** (P1)
-   ```
-   - 1226 个对象的 eviction list 太大
-   - 考虑增量 eviction
-   - 调查为何 100% eviction 都失败
-   ```
-
-3. **内存预分配** (P1)
-   - 避免每次传输都注册/注销内存
-   - 使用 memory pool
-
-4. **监控告警** (P2)
-   - URMA wait > 1ms 告警
-   - Eviction failed > 50% 告警
+**server_exec 相对较高但不是主要瓶颈**，因为 network_residual 占了 99.8%。
 
 ---
 
-## 七、其他受影响 Trace
+## 附录 A：全量日志
 
-| Trace ID | server_exec_us | URMA wait | server_req_queue | 问题类型 |
-|----------|---------------|-----------|-----------------|----------|
-| 0d34feb8 | 3654 | 3.57ms | 109us | URMA wait 高 |
-| 1051ba83 | 1790 | 1.64ms | 3068us | Queue + Eviction |
-| 3ec5259c | 1658 | N/A | 3025us | Queue + Eviction |
-| 836d814b | 1628 | N/A | 2955us | Queue 主导 |
+### Trace 0c3d819d Worker2 侧全量日志
+
+```
+// ========== Worker2 (192.168.42.114) 侧 ==========
+
+14:28:30.137018 | I | worker_worker_transport_service_impl.cpp:59 | 192.168.42.114 | 11:318 | 0c3d819d-c27b-4763-903e-82188ffde287 | jingpai | [URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo start, peerAddress=192.168.102.88:31402
+
+14:28:30.137038 | I | urma_manager.cpp:1660 | 192.168.42.114 | 11:318 | 0c3d819d-c27b-4763-903e-82188ffde287 | jingpai | Start import remote jetty, remote urma info: Instance id 442d08e9-bcab-4cf4-9559-82b1448afb62, address 192.168.102.88:31402, eid 4345:4944:1000:0000:2d00:0000:2e00:0000 uasid 0, jetty_id 1025, local address:192.168.42.114:31402
+
+14:28:30.139174 | I | urma_manager.cpp:1161 | 192.168.42.114 | 11:318 | 0c3d819d-c27b-4763-903e-82188ffde287 | jingpai | [URMA_CONNECT] Import target jetty elapsed = 1.86272ms, cpuid: 66, remoteInfo: Instance id 442d08e9-bcab-4cf4-9559-82b1448afb62, address 192.168.102.88:31402, eid 4345:4944:1000:0000:2d00:0000:2e00:0000 uasid 0, jetty_id 1025
+
+14:28:30.140276 | I | worker_worker_transport_service_impl.cpp:61 | 192.168.42.114 | 11:318 | 0c3d819d-c27b-4763-903e-82188ffde287 | jingpai | [URMA_NEED_CONNECT] WorkerWorkerExchangeUrmaConnectInfo finish, elapsed ms: 3.26462, status=code: [OK], msg: []
+
+14:28:30.145154 | I | worker_worker_oc_service_impl.cpp:176 | 192.168.42.114 | 11:303 | 0c3d819d-c27b-4763-903e-82188ffde287 | jingpai | Processing pull object[_urma_192_168_42_114:31402] offset[0] size[1], src=192.168.102.88:31402, dst=192.168.42.114:31402
+
+14:28:30.145197 | I | urma_manager.cpp:1297 | 192.168.42.114 | 11:303 | 0c3d819d-c27b-4763-903e-82188ffde287 | jingpai | URMA write useNumaAffinity:1, src:1, dst:1, jetty id:1029, urma_inflight_wr_count:1
+
+14:28:30.145291 | I | worker_worker_oc_service_impl.cpp:165 | 192.168.42.114 | 11:303 | 0c3d819d-c27b-4763-903e-82188ffde287 | jingpai | send data success
+```
+
+---
+
+## 附录 B：相关代码
+
+### B.1 GetObjectRemoteHandler
+
+**文件**: `worker_worker_oc_service_impl.cpp` (约 400-600 行)
+
+```cpp
+// GetObjectRemoteHandler 是实际处理请求的函数
+// 1. 验证 AK/SK
+// 2. 查询本地 ObjectKV
+// 3. 如果命中，从共享内存读取数据
+// 4. 准备 URMA 写操作
+Status WorkerWorkerOCServiceImpl::GetObjectRemoteHandler(...)
+{
+    // ...
+}
+```
+
+### B.2 URMA Write 代码
+
+**文件**: `urma_manager.cpp:1292-1310`
+
+```cpp
+if (useNumaAffinity) {
+    INJECT_POINT("UrmaManager.UrmaWriteNumaAffinity");
+    ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
+                      reinterpret_cast<urma_cb_t>(args.callback), args.useNumaAffinity, args.coalescing,
+                      args.localSegCount, nullptr);
+} else {
+    ret = PostJettyRw(args.jetty->Raw(), URMA_OPC_WRITE, args.targetJetty, args.remoteSeg, args.localSeg,
+                      reinterpret_cast<urma_cb_t>(args.callback), args.useNumaAffinity, args.coalescing,
+                      args.localSegCount, nullptr);
+}
+```
+
+---
+
+## 附录 C：相关代码文件路径
+
+| 文件 | 说明 |
+|------|------|
+| `src/datasystem/worker/object_cache/worker_worker_oc_service_impl.cpp` | Worker-to-Worker RPC 处理 |
+| `src/datasystem/common/rdma/urma_manager.cpp` | URMA 连接管理和读写 |
