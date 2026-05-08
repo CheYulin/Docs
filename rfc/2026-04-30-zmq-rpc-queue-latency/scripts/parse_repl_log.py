@@ -33,20 +33,49 @@ def _parse_json_balance(content: str, brace_start: int) -> dict | None:
 
 
 def extract_json_metrics(content: str) -> dict | None:
-    """从日志内容中提取 metrics_summary JSON（bazel --logtostderr 输出混有多行日志，优先 event 标记）。"""
+    """
+    从日志内容中提取 metrics_summary JSON（支持 multi-part 分片）。
+
+    日志格式为多行打印，每个 part_index 包含部分 metrics：
+      {"event":"metrics_summary",...,"part_index":1,"part_count":4,...}
+      {"event":"metrics_summary",...,"part_index":2,"part_count":4,...}
+      ...
+      === METRICS DUMP ===
+      { 完整合并的 metrics_summary }
+
+    解析策略：
+    1. 优先找 "=== METRICS DUMP ===" 后的完整 JSON（已合并）
+    2. 否则收集所有 part_index JSON，合并所有 metrics 数组
+    """
+    dump_marker = "=== METRICS DUMP ==="
+    dm = content.find(dump_marker)
+    if dm >= 0:
+        brace_start = content.find("{", dm + len(dump_marker))
+        if brace_start >= 0:
+            full = _parse_json_balance(content, brace_start)
+            if full and "metrics" in full:
+                return full
+
+    # Fallback: collect all part JSONs and merge metrics
     marker = '"event": "metrics_summary"'
-    idx = content.find(marker)
-    brace_start = -1
-    if idx >= 0:
+    all_metrics = []
+    pos = 0
+    while True:
+        idx = content.find(marker, pos)
+        if idx < 0:
+            break
         brace_start = content.rfind("{", 0, idx)
-    if brace_start < 0:
-        dump_marker = "=== METRICS DUMP ==="
-        dm = content.find(dump_marker)
-        if dm >= 0:
-            brace_start = content.find("{", dm + len(dump_marker))
-    if brace_start < 0:
+        if brace_start < 0:
+            pos = idx + len(marker)
+            continue
+        part = _parse_json_balance(content, brace_start)
+        if part and "metrics" in part:
+            all_metrics.extend(part["metrics"])
+        pos = idx + len(marker)
+
+    if not all_metrics:
         return None
-    return _parse_json_balance(content, brace_start)
+    return {"metrics": all_metrics}
 
 
 def extract_rpc_summary(content: str) -> tuple[str, str, str]:
@@ -123,10 +152,16 @@ def main():
 
     # 2a. Queue-flow latency（Histogram：summary JSON 中为微秒 avg_us/max_us、p50/p90/p99）
     queue_flow_names = [
-        "zmq_client_queuing_latency",
-        "zmq_server_queue_wait_latency",
+        # client-side
+        "zmq_client_req_queuing_latency",
+        "zmq_client_rsp_queuing_latency",
+        # server-side
+        "zmq_server_task_delay",
+        "zmq_server_req_queuing_latency",
+        "zmq_server_rsp_queuing_latency",
         "zmq_server_exec_latency",
-        "zmq_server_reply_latency",
+        "zmq_server_poll_handle_latency",
+        # e2e / network
         "zmq_rpc_e2e_latency",
         "zmq_rpc_network_latency",
     ]
