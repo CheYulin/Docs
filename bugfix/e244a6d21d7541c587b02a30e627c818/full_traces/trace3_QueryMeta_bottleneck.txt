@@ -1,0 +1,56 @@
+================================================================================
+TRACE 3: QueryMeta 11ms 瓶颈
+================================================================================
+TraceId: 1b5e3e17-9657-4148-93bd-49f78846c99e
+Worker IP: 192.168.199.160
+Object: kv_test_9_0_354482104440298_0
+Issue: Worker -> Master RPC 稳定耗时 11ms
+
+================================================================================
+LATENCY BREAKDOWN
+================================================================================
+- SDK Latency: 19041μs (19.041ms)
+- Worker totalCost: 11.209ms
+- Client → Worker (ZMQ Stub→Server): 19041 - 11209 = 7.832ms
+
+================================================================================
+WORKER LOG (worker_long15.log)
+================================================================================
+
+17:08:40.211904 | I | worker_oc_service_get_impl.cpp:1760 | 192.168.199.160 | 11:206 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Query metadata from master: 192.168.210.209:31402, objects: kv_test_9_0_354482104440298_0, request id: 611d2a42-bd50-4a49-bae3-1d2102c35021, remainingTime:14ms
+
+17:08:40.223005 | E | rpc_util.h:114 | 192.168.199.160 | 11:206 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  [RPC Retry]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client c06c1fdb-80e6-446f:10:281390620879024:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456479373408 Try again. The queue is empty within allowed time: 11 ms
+
+17:08:40.223016 | E | worker_oc_service_get_impl.cpp:1543 | 192.168.199.160 | 11:206 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Query metadata from master[192.168.210.209:31402]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client c06c1fdb-80e6-446f:10:281390620879024:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456479373408 Try again. The queue is empty within allowed time: 11 ms
+
+17:08:40.223026 | E | worker_oc_service_get_impl.cpp:773 | 192.168.199.160 | 11:206 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Query from master failed : code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client c06c1fdb-80e6-446f:10:281390620879024:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456479373408 Try again. The queue is empty within allowed time: 11 ms
+
+17:08:40.223039 | I | worker_request_manager.cpp:387 | 192.168.199.160 | 11:206 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Can't find object kv_test_9_0_354482104440298_0, clientId 752cb180-c182-4096-a478-3bf88cc0bfa0
+
+17:08:40.223073 | I | worker_oc_service_get_impl.cpp:198 | 192.168.199.160 | 11:206 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  [Get] Done, clientId: 752cb180-c182-4096-a478-3bf88cc0bfa0, objects: 1, transferPath: UB, totalCost: 11.209ms, inflightRemoteGet: 0 exceed 3ms: {Worker to master rpc QueryMeta: 11 ms; ProcessGetObjectRequest: 11 ms; }
+
+17:08:40.224451 | I | worker_oc_service_get_impl.cpp:1760 | 192.168.199.160 | 11:205 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Query metadata from master: 192.168.210.209:31402, objects: kv_test_9_0_354482104440298_0, request id: ab7e30ad-cae9-4183-a7a4-2003a8335f55, remainingTime:7ms
+
+17:08:40.230554 | E | rpc_util.h:114 | 192.168.199.160 | 11:205 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  [RPC Retry]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client b10cceb0-ebb0-4c25:10:281390620879024:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456487827552 Try again. The queue is empty within allowed time: 6 ms
+
+17:08:40.230563 | E | worker_oc_service_get_impl.cpp:1543 | 192.168.199.160 | 11:205 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Query metadata from master[192.168.210.209:31402]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client b10cceb0-ebb0-4c25:10:281390620879024:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456487827552 Try again. The queue is empty within allowed time: 6 ms
+
+17:08:40.230573 | E | worker_oc_service_get_impl.cpp:773 | 192.168.199.160 | 11:205 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Query from master failed : code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client b10cceb0-ebb0-4c25:10:281390620879024:0 has not responded within the ready time. Detail: code: [Try again], msg: [Thread ID 281456487827552 Try again. The queue is empty within allowed time: 6 ms
+
+17:08:40.230586 | I | worker_request_manager.cpp:387 | 192.168.199.160 | 11:205 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  Can't find object kv_test_9_0_354482104440298_0, clientId 752cb180-c182-4096-a478-3bf88cc0bfa0
+
+17:08:40.230626 | I | worker_oc_service_get_impl.cpp:198 | 192.168.199.160 | 11:205 | 1b5e3e17-9657-4148-93bd-49f78846c99e | jingpai |  [Get] Done, clientId: 752cb180-c182-4096-a478-3bf88cc0bfa0, objects: 1, transferPath: UB, totalCost: 6.209ms, inflightRemoteGet: 1 exceed 3ms: {Worker to master rpc QueryMeta: 6 ms; ProcessGetObjectRequest: 6 ms; }
+
+================================================================================
+SDK LOG (sdk_long15.log)
+================================================================================
+
+17:08:40.230765 | I | access_recorder.cpp:219 | 192.168.199.131 | 81:193 | 1b5e3e17-9657-4148-93bd-49f78846c99e |  | 1002 | DS_KV_CLIENT_GET | 19041 | 0 | {Object_key:kv_test_9_0_354482104440298_0,timeout:0,transportType:SHM} | [RPC_RECV_TIMEOUT] Rpc service for client b10cceb0-ebb0-4c25:10:281390620879024:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456487827552 Try again. The queue is empty within allowed time: 6 ms
+
+================================================================================
+ANALYSIS
+================================================================================
+- 瓶颈在 Worker -> Master 的 RPC 链路
+- 第一次尝试: queue is empty within 11ms -> 超时
+- 第二次尝试: queue is empty within 6ms -> 成功
+- 11ms 是一个稳定的延迟值，指向 Master 处理或网络的固定开销

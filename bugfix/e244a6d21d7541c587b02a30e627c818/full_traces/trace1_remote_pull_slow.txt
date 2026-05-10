@@ -1,0 +1,63 @@
+================================================================================
+TRACE 1: Remote Pull 慢 (15ms)
+================================================================================
+TraceId: 2202ec24-d0a8-417e-b95b-07e675e4be70
+Worker IP: 192.168.199.160
+Object: kv_test_37_11_354449809551380_0
+Issue: Remote pull cost 13.257ms, totalCost 15.560ms
+
+================================================================================
+LATENCY BREAKDOWN (计算方式: SDK latency - Worker totalCost)
+================================================================================
+- SDK Latency: 21136μs (21.136ms)
+- Worker totalCost: 15.560ms
+- Client → Worker (ZMQ Stub→Server): 21136 - 15560 = 5.576ms
+
+================================================================================
+WORKER LOG (worker_long15.log)
+================================================================================
+
+17:08:39.721753 | I | worker_oc_service_get_impl.cpp:1760 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  Query metadata from master: 192.168.182.59:31402, objects: kv_test_37_11_354449809551380_0, request id: 6703f091-8613-4543-a234-8fa266ad6b29, remainingTime:14ms
+
+17:08:39.722050 | I | worker_oc_service_get_impl.cpp:789 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [Get] Master query done, targets: 1, hits: 1, cost: 0.310ms
+
+17:08:39.735336 | E | rpc_util.h:114 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [RPC Retry]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client 842dac8a-900e-4fd0:16:281389281433520:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456496281696 Try again. The queue is empty within allowed time: 2 ms
+
+17:08:39.735347 | I | worker_oc_service_batch_get_impl.cpp:650 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [Get] Remote done, count: 1, path: UB, cost: 13.257ms, src=192.168.199.160:31402, dst=192.168.168.252:31402
+
+17:08:39.735358 | E | worker_oc_service_batch_get_impl.cpp:395 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [ObjectKey kv_test_37_11_354449809551380_0] Get from remote failed: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client 842dac8a-900e-4fd0:16:281389281433520:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456496281696 Try again. The queue is empty within allowed time: 2 ms
+
+17:08:39.735367 | E | worker_oc_service_batch_get_impl.cpp:210 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  BatchGetObjectFromRemoteOnLock failed. Detail: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client 842dac8a-900e-4fd0:16:281389281433520:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456496281696 Try again. The queue is empty within allowed time: 2 ms
+
+17:08:39.735371 | W | worker_oc_service_batch_get_impl.cpp:108 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  Get object from remote failed, start to remove location from master
+
+17:08:39.736482 | E | rpc_util.h:114 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [RPC Retry]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client de816db8-348d-4ab6:21:281388945824544:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456496281696 Try again. The queue is empty within allowed time: 1 ms
+
+17:08:39.736487 | E | worker_oc_service_get_impl.cpp:2478 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [ObjectKey kv_test_37_11_354449809551380_0] Remove location failed. Detail: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client de816db8-348d-4ab6:21:281388945824544:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456496281696 Try again. The queue is empty within allowed time: 1 ms
+
+17:08:39.737163 | E | worker_oc_service_batch_get_impl.cpp:248 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  Failed to get object data from remote. 0 objects pulled success: [], meta data num: 1 lastRc: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client 842dac8a-900e-4fd0:16:281389281433520:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281456496281696 Try again. The queue is empty within allowed time: 2 ms
+
+17:08:39.737178 | I | worker_oc_service_get_impl.cpp:554 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  delete unacked object meta, size: 1
+
+17:08:39.737195 | E | worker_oc_service_get_impl.cpp:2478 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [ObjectKey kv_test_37_11_354449809551380_0] Remove location failed. Detail: code: [RPC deadline exceeded], msg: [Thread ID 281456496281696 RPC deadline exceeded. Rpc timeout
+
+17:08:39.737239 | E | worker_request_manager.cpp:329 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  ReturnFromGetRequest timeout when get object: kv_test_37_11_354449809551380_0
+
+17:08:39.737274 | I | worker_oc_service_get_impl.cpp:198 | 192.168.199.160 | 11:204 | 2202ec24-d0a8-417e-b95b-07e675e4be70 | jingpai |  [Get] Done, clientId: 5e327506-6327-4c72-ae22-6a692b684f9d, objects: 1, transferPath: UB, totalCost: 15.560ms, inflightRemoteGet: 1 exceed 3ms: {ProcessGetObjectRequest: 15 ms; }
+
+================================================================================
+SDK LOG (sdk_long15.log)
+================================================================================
+
+17:08:39.742658 | I | access_recorder.cpp:219 | 192.168.199.133 | 81:179 | 2202ec24-d0a8-417e-b95b-07e675e4be70 |  | 1002 | DS_KV_CLIENT_GET | 21136 | 0 | {Object_key:kv_test_37_11_354449809551380_0,timeout:0,transportType:SHM} | [RPC_RECV_TIMEOUT] Rpc service for client 78fea019-b97d-4fe1:1:434583680:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281393520707616 Try again. The queue is empty within allowed time: 4 ms
+
+================================================================================
+ANALYSIS
+================================================================================
+耗时分解:
+- Client → Worker (ZMQ Stub→Server): 5.576ms
+- Master query: 0.310ms (正常)
+- Remote pull: 13.257ms (异常慢) ← 瓶颈
+- 总 Worker 处理: 15.560ms
+
+瓶颈在 Worker → Data Worker (192.168.168.252) 的 URMA 链路

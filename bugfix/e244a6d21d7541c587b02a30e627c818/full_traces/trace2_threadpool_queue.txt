@@ -1,0 +1,50 @@
+================================================================================
+TRACE 2: Worker 线程池排队 (50ms)
+================================================================================
+TraceId: c35150d0-1e50-4c8b-8bc3-9c59187d8957
+Worker IP: 192.168.210.131
+Object: kv_test_22_15_81278517098707_0
+Issue: 线程池满载导致排队 38ms，总耗时 50.617ms
+
+================================================================================
+LATENCY BREAKDOWN
+================================================================================
+- SDK Latency: 20587μs (20.587ms) - 注意: 这是另一个成功的 retry 的 latency
+- Worker totalCost: 50.617ms
+- Client → Worker (ZMQ Stub→Server): 约 5-7ms (通过差值估算)
+
+================================================================================
+WORKER LOG (worker_long15.log)
+================================================================================
+
+17:08:41.721306 | I | worker_oc_service_get_impl.cpp:1760 | 192.168.210.131 | 11:203 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  Query metadata from master: 192.168.215.52:31402, objects: kv_test_22_15_81278517098707_0, request id: 898dab3f-bcf8-441f-87f7-51d9c75f5f7f, remainingTime:14ms
+
+17:08:41.732407 | E | rpc_util.h:114 | 192.168.210.131 | 11:203 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  [RPC Retry]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client c5775bb8-9cb8-4135:7:281393842109040:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281463668476000 Try again. The queue is empty within allowed time: 11 ms
+
+17:08:41.732416 | E | worker_oc_service_get_impl.cpp:1543 | 192.168.210.131 | 11:203 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  Query metadata from master[192.168.215.52:31402]: code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client c5775bb8-9cb8-4135:7:281393842109040:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281463668476000 Try again. The queue is empty within allowed time: 11 ms
+
+17:08:41.732433 | E | worker_oc_service_get_impl.cpp:773 | 192.168.210.131 | 11:203 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  Query from master failed : code: [RPC unavailable], msg: [[RPC_RECV_TIMEOUT] Rpc service for client c5775bb8-9cb8-4135:7:281393842109040:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281463668476000 Try again. The queue is empty within allowed time: 11 ms
+
+17:08:41.732444 | I | worker_request_manager.cpp:387 | 192.168.210.131 | 11:203 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  Can't find object kv_test_22_15_81278517098707_0, clientId a12a527b-3a59-4666-9fb9-0e0a70185279
+
+17:08:41.771871 | I | worker_oc_service_get_impl.cpp:167 | 192.168.210.131 | 11:396 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  [Get] Receive, clientId: a12a527b-3a59-4666-9fb9-0e0a70185279, objects: kv_test_22_15_81278517098707_0, threadPool: idle(12),total(19),wait(10), elapsed: 38.000ms, remainingTime: 7.000ms
+
+17:08:41.771873 | I | worker_oc_service_get_impl.cpp:167 | 192.168.210.131 | 11:206 | 94de59a8-564e-47c3-94dd-59d76e35de25 | jingpai |  [Get] Receive, clientId: 53ad79ef-625d-41c0-b2f0-3a3a30abc4e8, objects: kv_test_2_7_89797779966739_0, threadPool: idle(12),total(19),wait(10), elapsed: 38.000ms, remainingTime: 16.000ms
+
+17:08:41.771874 | E | worker_oc_service_get_impl.cpp:173 | 192.168.210.131 | 11:396 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  RPC timeout. time elapsed 38, subTimeout:0, get threads Statistics: idle(12),total(19),wait(11)
+
+17:08:41.771895 | I | worker_oc_service_get_impl.cpp:198 | 192.168.210.131 | 11:203 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 | jingpai |  [Get] Done, clientId: a12a527b-3a59-4666-9fb9-0e0a70185279, objects: 1, transferPath: UB, totalCost: 50.617ms, inflightRemoteGet: 0 exceed 3ms: {Worker to master rpc QueryMeta: 11 ms; ProcessGetObjectRequest: 50 ms; }
+
+================================================================================
+SDK LOG (sdk_long15.log)
+================================================================================
+
+17:08:41.741712 | I | access_recorder.cpp:219 | 192.168.210.146 | 81:219 | c35150d0-1e50-4c8b-8bc3-9c59187d8957 |  | 1002 | DS_KV_CLIENT_GET | 20587 | 0 | {Object_key:kv_test_22_15_81278517098707_0,timeout:0,transportType:SHM} | [RPC_RECV_TIMEOUT] Rpc service for client a22487c6-20a7-43fa:1:1079523456:0 has not responded within the allowed time. Detail: code: [Try again], msg: [Thread ID 281401629280288 Try again. The queue is empty within allowed time: 8 ms
+
+================================================================================
+ANALYSIS
+================================================================================
+- 问题不是单个请求慢，而是系统级排队
+- threadPool 状态: idle=12, total=19, wait=10-14
+- 请求在队列中等待了 38ms (elapsed: 38.000ms)
+- 这是典型的容量不足问题
