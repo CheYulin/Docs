@@ -123,6 +123,8 @@ MAX_METRIC_LINES_PER_NAME = 8
 # metrics::Tick() / LogSummary() cadence (replaces gflag default 10s in smoke runs).
 # 2000ms: enough cycles in short read-loop runs so glog is likely to show metrics_summary.
 LOG_MONITOR_INTERVAL_MS = 2000
+# Minimum log level: 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL (no log output)
+MIN_LOG_LEVEL = 0
 # After client deletes KVClient: wait for last metrics JSON in glog (>= one tick + IO); overridden in main().
 CLIENT_POST_READ_FLUSH_SLEEP_SEC = 8
 VALUE_SIZE_LIST = [512 * 1024]  # 0.5MB only
@@ -335,6 +337,7 @@ def start_workers(log_dir):
             "--ready_check_path", str(probe_file),
             "--log_monitor", "true",
             "--log_monitor_interval_ms", str(LOG_MONITOR_INTERVAL_MS),
+            "--minloglevel", str(MIN_LOG_LEVEL),
         ]
 
         with open(wlog_dir / "worker_stdout.log", "w") as f:
@@ -890,6 +893,7 @@ def main():
     global KEYS_PER_CLIENT, READ_LOOP_SEC, MIN_ZMQ_METRIC_COUNT, INNER_GET_PASS_REPEAT
     global LOG_MONITOR_INTERVAL_MS, CLIENT_POST_READ_FLUSH_SLEEP_SEC
     global ENABLE_CROSS_NODE
+    global MIN_LOG_LEVEL
     global PYTHON_BIN, YR_SITE_PACKAGES, LD_PRELOAD, WORKER_BIN
 
     # 1. Parse args FIRST (--help exits here before binary discovery)
@@ -941,6 +945,15 @@ def main():
         action="store_true",
         help="Disable KVClient enable_cross_node_connection (no cross-worker redirect / follow).",
     )
+    parser.add_argument(
+        "--minloglevel",
+        type=int,
+        default=MIN_LOG_LEVEL,
+        help=(
+            f"Minimum log level: 0=INFO, 1=WARNING, 2=ERROR, 3=FATAL/off. "
+            f"Setting to 3 suppresses all log output (default: {MIN_LOG_LEVEL})."
+        ),
+    )
     args = parser.parse_args()
 
     # 2. Apply CLI overrides to globals
@@ -957,6 +970,7 @@ def main():
     CLIENT_POST_READ_FLUSH_SLEEP_SEC = max(8, _sec * 2 + 2)
     WORKER_PORTS = WORKER_PORTS[:WORKER_NUMS]
     ENABLE_CROSS_NODE = not args.no_cross_node
+    MIN_LOG_LEVEL = args.minloglevel
 
     # 3. Discover binaries and paths (fail here if not found)
     PYTHON_BIN = find_python_bin()
@@ -978,7 +992,7 @@ def main():
         f"keys/client: {KEYS_PER_CLIENT}, min_zmq_count: {MIN_ZMQ_METRIC_COUNT}, "
         f"inner_get_repeat: {INNER_GET_PASS_REPEAT}, "
         f"log_monitor_ms: {LOG_MONITOR_INTERVAL_MS}, post_client_flush_s: {CLIENT_POST_READ_FLUSH_SLEEP_SEC}, "
-        f"enable_cross_node: {ENABLE_CROSS_NODE}"
+        f"enable_cross_node: {ENABLE_CROSS_NODE}, minloglevel: {MIN_LOG_LEVEL}"
     )
 
     cleanup_all()
